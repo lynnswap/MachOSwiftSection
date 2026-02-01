@@ -173,7 +173,7 @@ extension Package.Dependency {
             isEnabled: true
         ),
         remote: .package(
-            url: "https://github.com/MxIris-Reverse-Engineering/MachOObjCSection.git",
+            url: "https://github.com/lynnswap/MachOObjCSection.git",
             branch: "main"
         ),
     )
