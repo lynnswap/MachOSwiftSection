@@ -416,12 +416,13 @@ public final class SymbolIndexStore: SharedCache<SymbolIndexStore.Storage>, @unc
     }
 
     public func memberSymbols<MachO: MachORepresentableWithCache>(of kinds: MemberKind..., excluding names: borrowing Set<String>, in machO: MachO) -> OrderedDictionary<Node, OrderedDictionary<MemberKind, [DemangledSymbol]>> {
-        let filtered = kinds.reduce(into: [:]) { $0[$1] = storage(in: machO)?.memberSymbolsByKind[$1]?.filter { !names.contains($0.key) } ?? [:] }
-
         var result: OrderedDictionary<Node, OrderedDictionary<MemberKind, [DemangledSymbol]>> = [:]
-        for (kind, memberSymbols) in filtered {
-            for (_, symbols) in memberSymbols {
-                for (node, symbols) in symbols {
+        // Keep the iteration order deterministic by walking `kinds` directly.
+        // (Swift.Dictionary iteration order is not stable across processes.)
+        for kind in kinds {
+            let memberSymbols = storage(in: machO)?.memberSymbolsByKind[kind]?.filter { !names.contains($0.key) } ?? [:]
+            for (_, symbolsByNode) in memberSymbols {
+                for (node, symbols) in symbolsByNode {
                     result[node, default: [:]][kind, default: []].append(contentsOf: symbols.mapWrappedValues())
                 }
             }
