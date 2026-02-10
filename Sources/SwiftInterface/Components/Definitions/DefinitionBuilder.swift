@@ -1,11 +1,13 @@
 import Demangling
 import MachOSymbols
 import MachOSwiftSection
+import OrderedCollections
 
 enum DefinitionBuilder {
     static func variables(for demangledSymbols: [DemangledSymbolWithOffset], fieldNames: borrowing Set<String> = [], methodDescriptorLookup: [Node: MethodDescriptorWrapper] = [:], isGlobalOrStatic: Bool) -> [VariableDefinition] {
         var variables: [VariableDefinition] = []
-        var accessorsByName: [String: [Accessor]] = [:]
+        // Keep output order deterministic by avoiding Swift.Dictionary iteration.
+        var accessorsByName: OrderedDictionary<String, [Accessor]> = [:]
         for demangledSymbol in demangledSymbols {
             guard let variableNode = demangledSymbol.base.demangledNode.first(of: .variable) else { continue }
             guard let name = variableNode.identifier else { continue }
@@ -24,7 +26,8 @@ enum DefinitionBuilder {
 
     static func subscripts(for demangledSymbols: [DemangledSymbolWithOffset], methodDescriptorLookup: [Node: MethodDescriptorWrapper] = [:], isStatic: Bool) -> [SubscriptDefinition] {
         var subscripts: [SubscriptDefinition] = []
-        var accessorsByNode: [Node: [Accessor]] = [:]
+        // Keep output order deterministic by avoiding Swift.Dictionary iteration.
+        var accessorsByNode: OrderedDictionary<Node, [Accessor]> = [:]
         for demangledSymbol in demangledSymbols {
             guard let subscriptNode = demangledSymbol.demangledNode.first(of: .subscript) else { continue }
             let kind = demangledSymbol.accessorKind
