@@ -100,20 +100,19 @@ var dependencies: [Package.Dependency] = [
     
     .package(url: "https://github.com/p-x9/AssociatedObject", from: "0.13.0"),
     .package(url: "https://github.com/p-x9/swift-fileio.git", from: "0.9.0"),
-    .package(url: "https://github.com/Mx-Iris/FrameworkToolbox", branch: "main"),
+    .package(url: "https://github.com/lynnswap/FrameworkToolbox.git", from: "0.3.3"),
     
     .package(url: "https://github.com/MxIris-Library-Forks/swift-memberwise-init-macro", from: "0.5.3-fork"),
-    .package(url: "https://github.com/Mx-Iris/SourceKitD", branch: "main"),
+    .package(url: "https://github.com/lynnswap/SourceKitD.git", from: "0.1.0"),
     .package(url: "https://github.com/christophhagen/BinaryCodable", from: "3.1.0"),
     
     .package(url: "https://github.com/pointfreeco/swift-dependencies", from: "1.9.4"),
     .package(url: "https://github.com/MxIris-DeveloperTool-Forks/swift-clang", from: "0.1.0"),
-    .package(url: "https://github.com/MxIris-DeveloperTool-Forks/swift-apinotes", branch: "main"),
-    .package(url: "https://github.com/MxIris-Reverse-Engineering/DyldPrivate", branch: "main"),
+    .package(url: "https://github.com/lynnswap/swift-apinotes.git", from: "0.1.0"),
+    .package(url: "https://github.com/lynnswap/DyldPrivate.git", from: "0.1.0"),
     
     // CLI
     .package(url: "https://github.com/onevcat/Rainbow", from: "4.0.0"),
-    .package(url: "https://github.com/migueldeicaza/TermKit", branch: "main"),
 ]
 
 extension Package.Dependency {
@@ -146,8 +145,8 @@ extension Package.Dependency {
             isEnabled: true
         ),
         remote: .package(
-            url: "https://github.com/MxIris-Reverse-Engineering/MachOKit.git",
-            branch: "main"
+            url: "https://github.com/lynnswap/MachOKit.git",
+            from: "0.45.1"
         ),
     )
 }
@@ -174,7 +173,7 @@ extension Package.Dependency {
         ),
         remote: .package(
             url: "https://github.com/lynnswap/MachOObjCSection.git",
-            revision: "0.5.1"
+            from: "0.5.2"
         ),
     )
 }
@@ -593,7 +592,7 @@ let package = Package(
 )
 
 if useSwiftTUI {
-    package.dependencies.append(.package(url: "https://github.com/rensbreur/SwiftTUI", branch: "main"))
+    package.dependencies.append(.package(url: "https://github.com/rensbreur/SwiftTUI", from: "0.1.0"))
     Target.swift_section.dependencies.append(.product(name: "SwiftTUI", package: "SwiftTUI"))
 }
 
