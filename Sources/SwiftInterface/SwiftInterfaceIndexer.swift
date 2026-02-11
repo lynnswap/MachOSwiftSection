@@ -144,11 +144,6 @@ public final class SwiftInterfaceIndexer<MachO: MachOSwiftSectionRepresentableWi
             currentStorage.associatedTypes = []
         }
 
-        @Dependency(\.symbolIndexStore)
-        var symbolIndexStore
-
-        symbolIndexStore.prepare(in: machO)
-
         do {
             try await index()
         } catch {
@@ -161,6 +156,12 @@ public final class SwiftInterfaceIndexer<MachO: MachOSwiftSectionRepresentableWi
 
     private func index() async throws {
         eventDispatcher.dispatch(.phaseTransition(phase: .indexing, state: .started))
+        @Dependency(\.symbolIndexStore)
+        var symbolIndexStore
+
+        eventDispatcher.dispatch(.phaseOperationStarted(phase: .indexing, operation: .dependencyIndexing))
+        symbolIndexStore.prepare(in: machO)
+        eventDispatcher.dispatch(.phaseOperationCompleted(phase: .indexing, operation: .dependencyIndexing))
 
         do {
             eventDispatcher.dispatch(.phaseOperationStarted(phase: .indexing, operation: .typeIndexing))
