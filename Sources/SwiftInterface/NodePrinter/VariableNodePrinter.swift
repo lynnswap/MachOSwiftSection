@@ -5,7 +5,7 @@ import Semantic
 struct VariableNodePrinter: InterfaceNodePrintable {
     typealias Context = InterfaceNodePrinterContext
 
-    var target: SemanticString = ""
+    var target: SemanticStringTarget = .init()
 
     private var isStatic: Bool = false
 
@@ -41,7 +41,7 @@ struct VariableNodePrinter: InterfaceNodePrintable {
             target.writeSpace()
         }
         try await _printRoot(node)
-        return target
+        return target.buildSemanticString()
     }
 
     private mutating func _printRoot(_ node: Node) async throws {

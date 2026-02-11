@@ -85,7 +85,24 @@ public struct SemanticString: Sendable, ExpressibleByStringLiteral, SemanticStri
         if let cached = _storage.cachedString {
             return cached
         }
-        let computed = components.map(\.string).joined()
+        // Avoid creating an intermediate `[String]` and try to reduce reallocations for large outputs.
+        let comps = components
+        var totalBytes = 0
+        totalBytes = comps.reduce(into: 0) { partial, component in
+            let count = component.string.utf8.count
+            if partial > Int.max - count {
+                partial = Int.max
+            } else {
+                partial += count
+            }
+        }
+        var computed = String()
+        if totalBytes != Int.max {
+            computed.reserveCapacity(totalBytes)
+        }
+        for component in comps {
+            computed.append(component.string)
+        }
         _storage.cachedString = computed
         return computed
     }

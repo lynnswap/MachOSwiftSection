@@ -7,6 +7,7 @@ import Demangling
 import Semantic
 import SwiftStdlibToolbox
 @_spi(Internals) import MachOSymbols
+import Dependencies
 import SwiftInspection
 
 public final class ExtensionDefinition: Definition, MutableDefinition {
@@ -68,35 +69,61 @@ public final class ExtensionDefinition: Definition, MutableDefinition {
     package func index<MachO: MachOSwiftSectionRepresentableWithCache>(in machO: MachO) async throws {
         guard !isIndexed else { return }
 
-        guard let protocolConformance, !protocolConformance.resilientWitnesses.isEmpty else { return }
+        guard let protocolConformance, !protocolConformance.resilientWitnesses.isEmpty else {
+            // Nothing to index, but mark as done so printing doesn't repeatedly call into `index`.
+            isIndexed = true
+            return
+        }
 
-        func _symbol(for symbols: Symbols, typeName: String, visitedNodes: borrowing OrderedSet<Node> = []) throws -> DemangledSymbol? {
+        @Dependency(\.symbolIndexStore)
+        var symbolIndexStore
+
+        let targetTypeNode = extensionName.node
+        let targetTypeName = extensionName.name
+        let primitiveTypeName = PrimitiveTypeMappingCache.shared.storage(in: machO)?.primitiveType(for: targetTypeName)
+
+        func _symbol(for symbols: Symbols, targetTypeName: String, primitiveTypeName: String?, visitedNodeIDs: borrowing Set<ObjectIdentifier> = []) throws -> DemangledSymbol? {
             for symbol in symbols {
-                if let node = try? MetadataReader.demangleSymbol(for: symbol, in: machO), let protocolConformanceNode = node.first(of: .protocolConformance), let symbolTypeName = protocolConformanceNode.children.first?.print(using: .interfaceTypeBuilderOnly), symbolTypeName == typeName || PrimitiveTypeMappingCache.shared.storage(in: machO)?.primitiveType(for: typeName) == symbolTypeName, !visitedNodes.contains(node) {
+                guard let node = symbolIndexStore.demangledNode(for: symbol, in: machO) else { continue }
+                guard !visitedNodeIDs.contains(ObjectIdentifier(node)) else { continue }
+                let protocolConformanceNode: Node
+                if let firstChild = node.children.first, firstChild.kind == .protocolConformance {
+                    protocolConformanceNode = firstChild
+                } else if let found = node.first(of: .protocolConformance) {
+                    protocolConformanceNode = found
+                } else {
+                    continue
+                }
+                guard let typeNode = protocolConformanceNode.children.first else { continue }
+                if typeNode == targetTypeNode {
+                    return .init(symbol: symbol, demangledNode: node)
+                }
+                let symbolTypeName = typeNode.print(using: .interfaceTypeBuilderOnly)
+                if symbolTypeName == targetTypeName || primitiveTypeName == symbolTypeName {
                     return .init(symbol: symbol, demangledNode: node)
                 }
             }
             return nil
         }
-        var visitedNodes: OrderedSet<Node> = []
+        var visitedNodeIDs: Set<ObjectIdentifier> = []
         var memberSymbolsByKind: OrderedDictionary<SymbolIndexStore.MemberKind, [DemangledSymbolWithOffset]> = [:]
 
         for resilientWitness in protocolConformance.resilientWitnesses {
-            if let symbols = try resilientWitness.implementationSymbols(in: machO), let symbol = try _symbol(for: symbols, typeName: extensionName.name, visitedNodes: visitedNodes) {
-                _ = visitedNodes.append(symbol.demangledNode)
+            if let symbols = try resilientWitness.implementationSymbols(in: machO), let symbol = try _symbol(for: symbols, targetTypeName: targetTypeName, primitiveTypeName: primitiveTypeName, visitedNodeIDs: visitedNodeIDs) {
+                visitedNodeIDs.insert(ObjectIdentifier(symbol.demangledNode))
                 addSymbol(.init(symbol), memberSymbolsByKind: &memberSymbolsByKind, inExtension: true)
             } else if let requirement = try resilientWitness.requirement(in: machO) {
                 switch requirement {
                 case .symbol(let symbol):
-                    if let demangledNode = try? MetadataReader.demangleSymbol(for: symbol, in: machO) {
+                    if let demangledNode = symbolIndexStore.demangledNode(for: symbol, in: machO) {
                         addSymbol(.init(.init(symbol: symbol, demangledNode: demangledNode)), memberSymbolsByKind: &memberSymbolsByKind, inExtension: true)
                     }
                 case .element(let element):
-                    if let symbols = try await Symbols.resolve(from: element.offset, in: machO), let symbol = try _symbol(for: symbols, typeName: extensionName.name, visitedNodes: visitedNodes) {
-                        _ = visitedNodes.append(symbol.demangledNode)
+                    if let symbols = try await Symbols.resolve(from: element.offset, in: machO), let symbol = try _symbol(for: symbols, targetTypeName: targetTypeName, primitiveTypeName: primitiveTypeName, visitedNodeIDs: visitedNodeIDs) {
+                        visitedNodeIDs.insert(ObjectIdentifier(symbol.demangledNode))
                         addSymbol(.init(symbol), memberSymbolsByKind: &memberSymbolsByKind, inExtension: true)
-                    } else if let defaultImplementationSymbols = try element.defaultImplementationSymbols(in: machO), let symbol = try _symbol(for: defaultImplementationSymbols, typeName: extensionName.name, visitedNodes: visitedNodes) {
-                        _ = visitedNodes.append(symbol.demangledNode)
+                    } else if let defaultImplementationSymbols = try element.defaultImplementationSymbols(in: machO), let symbol = try _symbol(for: defaultImplementationSymbols, targetTypeName: targetTypeName, primitiveTypeName: primitiveTypeName, visitedNodeIDs: visitedNodeIDs) {
+                        visitedNodeIDs.insert(ObjectIdentifier(symbol.demangledNode))
                         addSymbol(.init(symbol), memberSymbolsByKind: &memberSymbolsByKind, inExtension: true)
                     } else if !element.defaultImplementation.isNull {
                         missingSymbolWitnesses.append(resilientWitness)

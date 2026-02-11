@@ -415,6 +415,66 @@ public final class SymbolIndexStore: SharedCache<SymbolIndexStore.Storage>, @unc
         return kinds.map { storage(in: machO)?.memberSymbolsByKind[$0]?[name]?[node] ?? [] }.reduce(into: []) { $0 += $1.mapWrappedValues() }
     }
 
+    public func memberSymbolsByKind<MachO: MachORepresentableWithCache>(
+        of kinds: MemberKind...,
+        for name: String,
+        in machO: MachO
+    ) -> OrderedDictionary<MemberKind, [DemangledSymbol]> {
+        var result: OrderedDictionary<MemberKind, [DemangledSymbol]> = [:]
+        for kind in kinds {
+            let symbols = storage(in: machO)?.memberSymbolsByKind[kind]?[name]?.values.flatMap { $0 } ?? []
+            result[kind] = symbols.mapWrappedValues()
+        }
+        return result
+    }
+
+    public func memberSymbolsByKind<MachO: MachORepresentableWithCache>(
+        of kinds: MemberKind...,
+        for name: String,
+        node: Node,
+        in machO: MachO
+    ) -> OrderedDictionary<MemberKind, [DemangledSymbol]> {
+        var result: OrderedDictionary<MemberKind, [DemangledSymbol]> = [:]
+        for kind in kinds {
+            let symbols = storage(in: machO)?.memberSymbolsByKind[kind]?[name]?[node] ?? []
+            result[kind] = symbols.mapWrappedValues()
+        }
+        return result
+    }
+
+    public struct MemberSymbolsWithTypeName {
+        public let typeName: String
+        public var memberSymbolsByKind: OrderedDictionary<MemberKind, [DemangledSymbol]>
+
+        public init(typeName: String, memberSymbolsByKind: OrderedDictionary<MemberKind, [DemangledSymbol]>) {
+            self.typeName = typeName
+            self.memberSymbolsByKind = memberSymbolsByKind
+        }
+    }
+
+    /// Same as `memberSymbols(of:excluding:in:)` but preserves the precomputed type name so callers can avoid
+    /// recomputing it via `Node.print(...)`.
+    public func memberSymbolsWithTypeNames<MachO: MachORepresentableWithCache>(
+        of kinds: MemberKind...,
+        excluding names: borrowing Set<String>,
+        in machO: MachO
+    ) -> OrderedDictionary<Node, MemberSymbolsWithTypeName> {
+        var result: OrderedDictionary<Node, MemberSymbolsWithTypeName> = [:]
+        // Keep the iteration order deterministic by walking `kinds` directly.
+        // (Swift.Dictionary iteration order is not stable across processes.)
+        for kind in kinds {
+            let memberSymbols = storage(in: machO)?.memberSymbolsByKind[kind]?.filter { !names.contains($0.key) } ?? [:]
+            for (typeName, symbolsByNode) in memberSymbols {
+                for (node, symbols) in symbolsByNode {
+                    result[node, default: .init(typeName: typeName, memberSymbolsByKind: [:])]
+                        .memberSymbolsByKind[kind, default: []]
+                        .append(contentsOf: symbols.mapWrappedValues())
+                }
+            }
+        }
+        return result
+    }
+
     public func memberSymbols<MachO: MachORepresentableWithCache>(of kinds: MemberKind..., excluding names: borrowing Set<String>, in machO: MachO) -> OrderedDictionary<Node, OrderedDictionary<MemberKind, [DemangledSymbol]>> {
         var result: OrderedDictionary<Node, OrderedDictionary<MemberKind, [DemangledSymbol]>> = [:]
         // Keep the iteration order deterministic by walking `kinds` directly.
@@ -475,11 +535,9 @@ public final class SymbolIndexStore: SharedCache<SymbolIndexStore.Storage>, @unc
         guard let cacheStorage = storage(in: machO) else { return nil }
         if let node = cacheStorage.demangledNodeBySymbol[symbol] {
             return node
-        } else if let node = try? demangleAsNode(symbol.name) {
-            cacheStorage.setDemangledNode(node, for: symbol)
-            return node
         } else {
-            return nil
+            // Avoid mutating shared dictionaries here; this is called from parallel indexing.
+            return try? demangleAsNode(symbol.name)
         }
     }
 

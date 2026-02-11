@@ -26,16 +26,43 @@ public final class SwiftInterfacePrinter<MachO: MachOSwiftSectionRepresentableWi
     @Mutex
     var typeDemangleResolver: DemangleResolver = .using(options: .default)
 
+    private struct TypeNodeCacheKey: Hashable, Sendable {
+        let node: Node
+        let isProtocol: Bool
+    }
+
+    private let typeNodeCacheLimit = 50_000
+
+    @Mutex
+    private var typeNodeCache: [TypeNodeCacheKey: SemanticString] = [:]
+
     public init(configuration: SwiftInterfacePrintConfiguration = .init(), eventHandlers: [SwiftInterfaceEvents.Handler] = [], in machO: MachO) {
         self.machO = machO
         self.configuration = configuration
         eventDispatcher.addHandlers(eventHandlers)
         self.typeDemangleResolver = .using { [weak self] node in
-            if let self {
-                var printer = TypeNodePrinter(delegate: self)
-                try await printer.printRoot(node)
-            }
+            guard let self else { return "" }
+            return try await self.cachedPrintTypeNode(node, isProtocol: false)
         }
+    }
+
+    private func cachedPrintTypeNode(_ node: Node, isProtocol: Bool) async throws -> SemanticString {
+        let key = TypeNodeCacheKey(node: node, isProtocol: isProtocol)
+        if let cached = _typeNodeCache.withLock({ $0[key] }) {
+            return cached
+        }
+
+        var printer = TypeNodePrinter(delegate: self, isProtocol: isProtocol)
+        let printed = try await printer.printRoot(node)
+
+        _typeNodeCache.withLock { cache in
+            if cache.count > typeNodeCacheLimit {
+                cache.removeAll(keepingCapacity: true)
+            }
+            cache[key] = printed
+        }
+
+        return printed
     }
 
     public func updateConfiguration(_ configuration: SwiftInterfacePrintConfiguration) {
@@ -285,8 +312,7 @@ public final class SwiftInterfacePrinter<MachO: MachOSwiftSectionRepresentableWi
 
     @SemanticStringBuilder
     public func printThrowingType(_ typeNode: Node, isProtocol: Bool, level: Int) async throws -> SemanticString {
-        var printer = TypeNodePrinter(delegate: self, isProtocol: isProtocol)
-        try await printer.printRoot(typeNode)
+        try await cachedPrintTypeNode(typeNode, isProtocol: isProtocol)
     }
 }
 

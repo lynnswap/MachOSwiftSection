@@ -464,7 +464,7 @@ public final class SwiftInterfaceIndexer<MachO: MachOSwiftSectionRepresentableWi
         @Dependency(\.symbolIndexStore)
         var symbolIndexStore
 
-        let memberSymbolsByName = await symbolIndexStore.memberSymbols(
+        let memberSymbolsByName = await symbolIndexStore.memberSymbolsWithTypeNames(
             of: .allocator(inExtension: true),
             .variable(inExtension: true, isStatic: false, isStorage: false),
             .variable(inExtension: true, isStatic: true, isStorage: false),
@@ -485,8 +485,9 @@ public final class SwiftInterfaceIndexer<MachO: MachOSwiftSectionRepresentableWi
         var typeAliasExtensionCount = 0
         var failedExtensions = 0
 
-        for (node, memberSymbols) in memberSymbolsByName {
-            let name = node.print(using: .interfaceTypeBuilderOnly)
+        for (node, entry) in memberSymbolsByName {
+            let name = entry.typeName
+            let memberSymbols = entry.memberSymbolsByKind
             guard let typeInfo = symbolIndexStore.typeInfo(for: name, in: machO) else {
                 eventDispatcher.dispatch(.extensionTargetNotFound(targetName: name))
                 continue
@@ -538,8 +539,8 @@ public final class SwiftInterfaceIndexer<MachO: MachOSwiftSectionRepresentableWi
             var memberSymbolsByGenericSignature: OrderedDictionary<Node, OrderedDictionary<SymbolIndexStore.MemberKind, [DemangledSymbol]>> = [:]
             var memberSymbolsByKind: OrderedDictionary<SymbolIndexStore.MemberKind, [DemangledSymbol]> = [:]
 
-            for (kind, memberSymbols) in memberSymbols {
-                for memberSymbol in memberSymbols {
+            for (kind, symbols) in memberSymbols {
+                for memberSymbol in symbols {
                     if let genericSignature = memberSymbol.demangledNode.first(of: .dependentGenericSignature), case .variable = kind {
                         memberSymbolsByGenericSignature[genericSignature, default: [:]][kind, default: []].append(memberSymbol)
                     } else {

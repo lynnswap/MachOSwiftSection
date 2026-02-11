@@ -1,4 +1,6 @@
 import MachOSwiftSection
+import Foundation
+import Dispatch
 import MemberwiseInit
 import OrderedCollections
 import SwiftDump
@@ -12,6 +14,13 @@ import Utilities
 @_spi(Internals) import MachOCaches
 
 public final class SwiftInterfaceBuilder<MachO: MachOSwiftSectionRepresentableWithCache>: Sendable {
+    private struct UnsafeSendableBox<T>: @unchecked Sendable {
+        let value: T
+        init(_ value: T) {
+            self.value = value
+        }
+    }
+
     private static var internalModules: [String] {
         ["Swift", "_Concurrency", "_StringProcessing", "_SwiftConcurrencyShims"]
     }
@@ -34,10 +43,7 @@ public final class SwiftInterfaceBuilder<MachO: MachOSwiftSectionRepresentableWi
     public private(set) var extraDataProviders: [SwiftInterfaceBuilderExtraDataProvider] = []
 
     private let eventDispatcher: SwiftInterfaceEvents.Dispatcher
-
-    private var allExtensionDefinitions: [ExtensionDefinition] {
-        (indexer.typeExtensionDefinitions.values.flatMap { $0 } + indexer.protocolExtensionDefinitions.values.flatMap { $0 } + indexer.typeAliasExtensionDefinitions.values.flatMap { $0 } + indexer.conformanceExtensionDefinitions.values.flatMap { $0 })
-    }
+    private let hasEventHandlers: Bool
 
     /// Creates a new Swift interface builder for the given Mach-O binary.
     ///
@@ -48,6 +54,7 @@ public final class SwiftInterfaceBuilder<MachO: MachOSwiftSectionRepresentableWi
     /// - Throws: An error if the binary cannot be read or if required Swift sections are missing.
     public init(configuration: SwiftInterfaceBuilderConfiguration = .init(), eventHandlers: [SwiftInterfaceEvents.Handler] = [], in machO: MachO) throws {
         self.eventDispatcher = .init()
+        self.hasEventHandlers = !eventHandlers.isEmpty
         self.machO = machO
         self.indexer = .init(configuration: configuration.indexConfiguration, eventHandlers: eventHandlers, in: machO)
         self.printer = .init(configuration: configuration.printConfiguration, eventHandlers: eventHandlers, in: machO)
@@ -104,8 +111,12 @@ public final class SwiftInterfaceBuilder<MachO: MachOSwiftSectionRepresentableWi
 
     @SemanticStringBuilder
     public func printRoot() async throws -> SemanticString {
+        let buildStart = DispatchTime.now().uptimeNanoseconds
+        let _ = hasEventHandlers ? eventDispatcher.dispatch(.phaseTransition(phase: .build, state: .started)) : ()
+
         ImportsBlock(OrderedSet(Self.internalModules + importedModules).sorted())
 
+        let globalVariablesStart = DispatchTime.now().uptimeNanoseconds
         await printCatchedThrowing {
             await BlockList {
                 for variable in indexer.globalVariableDefinitions {
@@ -113,7 +124,10 @@ public final class SwiftInterfaceBuilder<MachO: MachOSwiftSectionRepresentableWi
                 }
             }
         }
+        let globalVariablesDuration = DispatchTime.now().uptimeNanoseconds &- globalVariablesStart
+        let _ = hasEventHandlers ? eventDispatcher.dispatch(.diagnostic(message: .init(level: .debug, message: "build.globalVariables completed (\(formatDurationSeconds(globalVariablesDuration))) count=\(indexer.globalVariableDefinitions.count)", error: nil, context: nil))) : ()
 
+        let globalFunctionsStart = DispatchTime.now().uptimeNanoseconds
         await printCatchedThrowing {
             await BlockList {
                 for function in indexer.globalFunctionDefinitions {
@@ -121,7 +135,10 @@ public final class SwiftInterfaceBuilder<MachO: MachOSwiftSectionRepresentableWi
                 }
             }
         }
+        let globalFunctionsDuration = DispatchTime.now().uptimeNanoseconds &- globalFunctionsStart
+        let _ = hasEventHandlers ? eventDispatcher.dispatch(.diagnostic(message: .init(level: .debug, message: "build.globalFunctions completed (\(formatDurationSeconds(globalFunctionsDuration))) count=\(indexer.globalFunctionDefinitions.count)", error: nil, context: nil))) : ()
 
+        let typesStart = DispatchTime.now().uptimeNanoseconds
         await printCatchedThrowing {
             try await BlockList {
                 for typeDefinition in indexer.rootTypeDefinitions.values {
@@ -129,7 +146,10 @@ public final class SwiftInterfaceBuilder<MachO: MachOSwiftSectionRepresentableWi
                 }
             }
         }
+        let typesDuration = DispatchTime.now().uptimeNanoseconds &- typesStart
+        let _ = hasEventHandlers ? eventDispatcher.dispatch(.diagnostic(message: .init(level: .debug, message: "build.types completed (\(formatDurationSeconds(typesDuration))) count=\(indexer.rootTypeDefinitions.count)", error: nil, context: nil))) : ()
 
+        let protocolsStart = DispatchTime.now().uptimeNanoseconds
         await printCatchedThrowing {
             try await BlockList {
                 for protocolDefinition in indexer.rootProtocolDefinitions.values {
@@ -137,24 +157,91 @@ public final class SwiftInterfaceBuilder<MachO: MachOSwiftSectionRepresentableWi
                 }
             }
         }
+        let protocolsDuration = DispatchTime.now().uptimeNanoseconds &- protocolsStart
+        let _ = hasEventHandlers ? eventDispatcher.dispatch(.diagnostic(message: .init(level: .debug, message: "build.protocols completed (\(formatDurationSeconds(protocolsDuration))) count=\(indexer.rootProtocolDefinitions.count)", error: nil, context: nil))) : ()
 
+        let defaultImplExtensionsStart = DispatchTime.now().uptimeNanoseconds
         await printCatchedThrowing {
             try await BlockList {
-                for protocolDefinition in indexer.rootProtocolDefinitions.values.filterNonNil(\.parent) {
-                    for extensionDefinition in protocolDefinition.defaultImplementationExtensions {
+                for proto in indexer.rootProtocolDefinitions.values.filterNonNil(\.parent) {
+                    for extensionDefinition in proto.defaultImplementationExtensions {
                         try await printer.printExtensionDefinition(extensionDefinition)
                     }
                 }
             }
         }
+        let defaultImplExtensionsDuration = DispatchTime.now().uptimeNanoseconds &- defaultImplExtensionsStart
+        let _ = hasEventHandlers ? eventDispatcher.dispatch(.diagnostic(message: .init(level: .debug, message: "build.defaultImplementationExtensions completed (\(formatDurationSeconds(defaultImplExtensionsDuration)))", error: nil, context: nil))) : ()
 
+        let extensionsStart = DispatchTime.now().uptimeNanoseconds
         await printCatchedThrowing {
             try await BlockList {
-                for extensionDefinition in allExtensionDefinitions {
+                // Preserve the existing output order without allocating an intermediate flattened array.
+                var typeExtensionCount = 0
+                let typeExtensionsStart = DispatchTime.now().uptimeNanoseconds
+                for group in indexer.typeExtensionDefinitions.values {
+                    for extensionDefinition in group {
+                        typeExtensionCount += 1
+                        try await printer.printExtensionDefinition(extensionDefinition)
+                    }
+                }
+                let typeExtensionsDuration = DispatchTime.now().uptimeNanoseconds &- typeExtensionsStart
+                let _ = hasEventHandlers ? eventDispatcher.dispatch(.diagnostic(message: .init(level: .debug, message: "build.extensions.type completed (\(formatDurationSeconds(typeExtensionsDuration))) count=\(typeExtensionCount)", error: nil, context: nil))) : ()
+
+                var protocolExtensionCount = 0
+                let protocolExtensionsStart = DispatchTime.now().uptimeNanoseconds
+                for group in indexer.protocolExtensionDefinitions.values {
+                    for extensionDefinition in group {
+                        protocolExtensionCount += 1
+                        try await printer.printExtensionDefinition(extensionDefinition)
+                    }
+                }
+                let protocolExtensionsDuration = DispatchTime.now().uptimeNanoseconds &- protocolExtensionsStart
+                let _ = hasEventHandlers ? eventDispatcher.dispatch(.diagnostic(message: .init(level: .debug, message: "build.extensions.protocol completed (\(formatDurationSeconds(protocolExtensionsDuration))) count=\(protocolExtensionCount)", error: nil, context: nil))) : ()
+
+                var typeAliasExtensionCount = 0
+                let typeAliasExtensionsStart = DispatchTime.now().uptimeNanoseconds
+                for group in indexer.typeAliasExtensionDefinitions.values {
+                    for extensionDefinition in group {
+                        typeAliasExtensionCount += 1
+                        try await printer.printExtensionDefinition(extensionDefinition)
+                    }
+                }
+                let typeAliasExtensionsDuration = DispatchTime.now().uptimeNanoseconds &- typeAliasExtensionsStart
+                let _ = hasEventHandlers ? eventDispatcher.dispatch(.diagnostic(message: .init(level: .debug, message: "build.extensions.typeAlias completed (\(formatDurationSeconds(typeAliasExtensionsDuration))) count=\(typeAliasExtensionCount)", error: nil, context: nil))) : ()
+
+                var conformanceExtensions: [ExtensionDefinition] = []
+                conformanceExtensions.reserveCapacity(indexer.conformanceExtensionDefinitions.values.reduce(into: 0) { $0 += $1.count })
+                for group in indexer.conformanceExtensionDefinitions.values {
+                    conformanceExtensions.append(contentsOf: group)
+                }
+
+                let conformanceExtensionCount = conformanceExtensions.count
+                let conformanceExtensionsStart = DispatchTime.now().uptimeNanoseconds
+
+                let conformanceIndexStart = DispatchTime.now().uptimeNanoseconds
+                try await indexConformanceExtensions(conformanceExtensions)
+                let conformanceIndexDuration = DispatchTime.now().uptimeNanoseconds &- conformanceIndexStart
+                let _ = hasEventHandlers ? eventDispatcher.dispatch(.diagnostic(message: .init(level: .debug, message: "build.extensions.conformance.index completed (\(formatDurationSeconds(conformanceIndexDuration))) count=\(conformanceExtensionCount)", error: nil, context: nil))) : ()
+
+                let conformancePrintStart = DispatchTime.now().uptimeNanoseconds
+                for extensionDefinition in conformanceExtensions {
                     try await printer.printExtensionDefinition(extensionDefinition)
                 }
+                let conformancePrintDuration = DispatchTime.now().uptimeNanoseconds &- conformancePrintStart
+                let _ = hasEventHandlers ? eventDispatcher.dispatch(.diagnostic(message: .init(level: .debug, message: "build.extensions.conformance.print completed (\(formatDurationSeconds(conformancePrintDuration))) count=\(conformanceExtensionCount)", error: nil, context: nil))) : ()
+
+                let conformanceExtensionsDuration = DispatchTime.now().uptimeNanoseconds &- conformanceExtensionsStart
+                let _ = hasEventHandlers ? eventDispatcher.dispatch(.diagnostic(message: .init(level: .debug, message: "build.extensions.conformance completed (\(formatDurationSeconds(conformanceExtensionsDuration))) count=\(conformanceExtensionCount)", error: nil, context: nil))) : ()
             }
         }
+
+        let extensionsDuration = DispatchTime.now().uptimeNanoseconds &- extensionsStart
+        let _ = hasEventHandlers ? eventDispatcher.dispatch(.diagnostic(message: .init(level: .debug, message: "build.extensions completed (\(formatDurationSeconds(extensionsDuration)))", error: nil, context: nil))) : ()
+
+        let _ = hasEventHandlers ? eventDispatcher.dispatch(.phaseTransition(phase: .build, state: .completed)) : ()
+        let buildDuration = DispatchTime.now().uptimeNanoseconds &- buildStart
+        let _ = hasEventHandlers ? eventDispatcher.dispatch(.diagnostic(message: .init(level: .debug, message: "build.total completed (\(formatDurationSeconds(buildDuration)))", error: nil, context: nil))) : ()
     }
 
     private func collectModules() async throws {
@@ -180,5 +267,39 @@ public final class SwiftInterfaceBuilder<MachO: MachOSwiftSectionRepresentableWi
 
         importedModules = usedModules
         eventDispatcher.dispatch(.moduleCollectionCompleted(result: SwiftInterfaceEvents.ModuleCollectionResult(moduleCount: usedModules.count, modules: Array(usedModules.sorted()))))
+    }
+
+    private func formatDurationSeconds(_ nanos: UInt64) -> String {
+        String(format: "%.3fs", Double(nanos) / 1_000_000_000.0)
+    }
+
+    private func indexConformanceExtensions(_ extensions: [ExtensionDefinition]) async throws {
+        // Default to a conservative degree of parallelism. Conformance indexing is CPU heavy and benefits a lot
+        // from parallelism, but it also touches shared caches.
+        let maxConcurrent = max(1, min(4, ProcessInfo.processInfo.activeProcessorCount))
+        let machOBox = UnsafeSendableBox(machO)
+
+        var iterator = extensions.makeIterator()
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            var inFlight = 0
+            while let ext = iterator.next() {
+                let extBox = UnsafeSendableBox(ext)
+                group.addTask {
+                    if !extBox.value.isIndexed {
+                        try await extBox.value.index(in: machOBox.value)
+                    }
+                }
+                inFlight += 1
+                if inFlight >= maxConcurrent {
+                    _ = try await group.next()
+                    inFlight -= 1
+                }
+            }
+
+            while inFlight > 0 {
+                _ = try await group.next()
+                inFlight -= 1
+            }
+        }
     }
 }

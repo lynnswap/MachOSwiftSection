@@ -147,52 +147,62 @@ public final class TypeDefinition: Definition {
         let name = typeName.name
         let node = typeName.node
 
+        let memberSymbolsByKind = symbolIndexStore.memberSymbolsByKind(
+            of: .allocator(inExtension: false),
+            .variable(inExtension: false, isStatic: false, isStorage: false),
+            .variable(inExtension: false, isStatic: true, isStorage: false),
+            .variable(inExtension: false, isStatic: true, isStorage: true),
+            .function(inExtension: false, isStatic: false),
+            .function(inExtension: false, isStatic: true),
+            .subscript(inExtension: false, isStatic: false),
+            .subscript(inExtension: false, isStatic: true),
+            for: name,
+            node: node,
+            in: machO
+        )
+
         allocators = DefinitionBuilder.allocators(
-            for: symbolIndexStore.memberSymbols(of: .allocator(inExtension: false), for: name, node: node, in: machO).map { .init(base: $0, offset: nil) },
+            for: (memberSymbolsByKind[.allocator(inExtension: false)] ?? []).mapToDemangledSymbolWithOffset(),
             methodDescriptorLookup: methodDescriptorLookup
         )
 
-        hasDeallocator = !symbolIndexStore.memberSymbols(of: .deallocator, for: typeName.name, in: machO).isEmpty
+        hasDeallocator = !symbolIndexStore.memberSymbols(of: .deallocator, for: name, in: machO).isEmpty
 
         variables = DefinitionBuilder.variables(
-            for: symbolIndexStore.memberSymbols(of: .variable(inExtension: false, isStatic: false, isStorage: false), for: name, node: node, in: machO).map { .init(base: $0, offset: nil) },
+            for: (memberSymbolsByKind[.variable(inExtension: false, isStatic: false, isStorage: false)] ?? []).mapToDemangledSymbolWithOffset(),
             fieldNames: fieldNames,
             methodDescriptorLookup: methodDescriptorLookup,
             isGlobalOrStatic: false
         )
 
+        let staticVariableSymbols = (memberSymbolsByKind[.variable(inExtension: false, isStatic: true, isStorage: false)] ?? []) +
+            (memberSymbolsByKind[.variable(inExtension: false, isStatic: true, isStorage: true)] ?? [])
         staticVariables = DefinitionBuilder.variables(
-            for: symbolIndexStore.memberSymbols(
-                of: .variable(inExtension: false, isStatic: true, isStorage: false),
-                .variable(inExtension: false, isStatic: true, isStorage: true),
-                for: name,
-                node: node,
-                in: machO
-            ).map { .init(base: $0, offset: nil) },
+            for: staticVariableSymbols.mapToDemangledSymbolWithOffset(),
             methodDescriptorLookup: methodDescriptorLookup,
             isGlobalOrStatic: true
         )
 
         functions = DefinitionBuilder.functions(
-            for: symbolIndexStore.memberSymbols(of: .function(inExtension: false, isStatic: false), for: name, node: node, in: machO).map { .init(base: $0, offset: nil) },
+            for: (memberSymbolsByKind[.function(inExtension: false, isStatic: false)] ?? []).mapToDemangledSymbolWithOffset(),
             methodDescriptorLookup: methodDescriptorLookup,
             isGlobalOrStatic: false
         )
 
         staticFunctions = DefinitionBuilder.functions(
-            for: symbolIndexStore.memberSymbols(of: .function(inExtension: false, isStatic: true), for: name, node: node, in: machO).map { .init(base: $0, offset: nil) },
+            for: (memberSymbolsByKind[.function(inExtension: false, isStatic: true)] ?? []).mapToDemangledSymbolWithOffset(),
             methodDescriptorLookup: methodDescriptorLookup,
             isGlobalOrStatic: true
         )
 
         subscripts = DefinitionBuilder.subscripts(
-            for: symbolIndexStore.memberSymbols(of: .subscript(inExtension: false, isStatic: false), for: name, node: node, in: machO).map { .init(base: $0, offset: nil) },
+            for: (memberSymbolsByKind[.subscript(inExtension: false, isStatic: false)] ?? []).mapToDemangledSymbolWithOffset(),
             methodDescriptorLookup: methodDescriptorLookup,
             isStatic: false
         )
 
         staticSubscripts = DefinitionBuilder.subscripts(
-            for: symbolIndexStore.memberSymbols(of: .subscript(inExtension: false, isStatic: true), for: name, node: node, in: machO).map { .init(base: $0, offset: nil) },
+            for: (memberSymbolsByKind[.subscript(inExtension: false, isStatic: true)] ?? []).mapToDemangledSymbolWithOffset(),
             methodDescriptorLookup: methodDescriptorLookup,
             isStatic: true
         )

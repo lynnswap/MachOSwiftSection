@@ -5,7 +5,7 @@ import Semantic
 struct TypeNodePrinter: InterfaceNodePrintable {
     typealias Context = InterfaceNodePrinterContext
 
-    var target: SemanticString = ""
+    var target: SemanticStringTarget = .init()
 
     var targetNode: Node? { nil }
 
@@ -20,6 +20,6 @@ struct TypeNodePrinter: InterfaceNodePrintable {
 
     mutating func printRoot(_ node: Node) async throws -> SemanticString {
         await printName(node)
-        return target
+        return target.buildSemanticString()
     }
 }

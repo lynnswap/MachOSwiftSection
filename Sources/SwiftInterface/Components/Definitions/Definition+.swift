@@ -4,30 +4,48 @@ import OrderedCollections
 extension Definition {
     func addSymbol(_ symbol: DemangledSymbolWithOffset, memberSymbolsByKind: inout OrderedDictionary<SymbolIndexStore.MemberKind, [DemangledSymbolWithOffset]>, inExtension: Bool) {
         let node = symbol.demangledNode
-        if node.contains(.variable) {
-            if node.contains(.static) {
-                if node.isStoredVariable {
-                    memberSymbolsByKind[.variable(inExtension: inExtension, isStatic: true, isStorage: true), default: []].append(symbol)
-                } else {
-                    memberSymbolsByKind[.variable(inExtension: inExtension, isStatic: true, isStorage: false), default: []].append(symbol)
+
+        // `Node.contains(...)` performs a preorder walk each time, so keep this classification to a single pass.
+        var hasVariable = false
+        var hasAllocator = false
+        var hasFunction = false
+        var hasSubscript = false
+        var hasStatic = false
+        var isStoredVariable = false
+
+        for child in node {
+            switch child.kind {
+            case .static:
+                hasStatic = true
+            case .variable:
+                // Mirror `first(of: .variable)` semantics used by `node.isStoredVariable`.
+                if !hasVariable {
+                    hasVariable = true
+                    isStoredVariable = child.parent?.isAccessor == false
                 }
+            case .allocator:
+                hasAllocator = true
+            case .function:
+                hasFunction = true
+            case .subscript:
+                hasSubscript = true
+            default:
+                break
+            }
+        }
+
+        if hasVariable {
+            if hasStatic {
+                memberSymbolsByKind[.variable(inExtension: inExtension, isStatic: true, isStorage: isStoredVariable), default: []].append(symbol)
             } else {
                 memberSymbolsByKind[.variable(inExtension: inExtension, isStatic: false, isStorage: false), default: []].append(symbol)
             }
-        } else if node.contains(.allocator) {
+        } else if hasAllocator {
             memberSymbolsByKind[.allocator(inExtension: inExtension), default: []].append(symbol)
-        } else if node.contains(.function) {
-            if node.contains(.static) {
-                memberSymbolsByKind[.function(inExtension: inExtension, isStatic: true), default: []].append(symbol)
-            } else {
-                memberSymbolsByKind[.function(inExtension: inExtension, isStatic: false), default: []].append(symbol)
-            }
-        } else if node.contains(.subscript) {
-            if node.contains(.static) {
-                memberSymbolsByKind[.subscript(inExtension: inExtension, isStatic: true), default: []].append(symbol)
-            } else {
-                memberSymbolsByKind[.subscript(inExtension: inExtension, isStatic: false), default: []].append(symbol)
-            }
+        } else if hasFunction {
+            memberSymbolsByKind[.function(inExtension: inExtension, isStatic: hasStatic), default: []].append(symbol)
+        } else if hasSubscript {
+            memberSymbolsByKind[.subscript(inExtension: inExtension, isStatic: hasStatic), default: []].append(symbol)
         }
     }
 }
