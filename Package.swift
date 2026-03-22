@@ -71,7 +71,7 @@ extension Package.Dependency {
     }
 }
 
-let MachOKitVersion: Version = "0.42.0"
+let MachOKitVersion: Version = "0.46.1"
 
 let isSilentTest = envEnable("MACHO_SWIFT_SECTION_SILENT_TEST", default: false)
 
@@ -145,8 +145,8 @@ extension Package.Dependency {
             isEnabled: true
         ),
         remote: .package(
-            url: "https://github.com/lynnswap/MachOKit.git",
-            from: "0.45.1"
+            url: "https://github.com/p-x9/MachOKit.git",
+            from: "0.46.1"
         ),
     )
 }
@@ -162,7 +162,7 @@ extension Package.Dependency {
 
     static let MachOObjCSectionOrigin = Package.Dependency.package(
         url: "https://github.com/p-x9/MachOObjCSection.git",
-        from: "0.5.0"
+        from: "0.6.0"
     )
 
     static let MachOObjCSectionMain = Package.Dependency.package(
@@ -172,8 +172,8 @@ extension Package.Dependency {
             isEnabled: true
         ),
         remote: .package(
-            url: "https://github.com/lynnswap/MachOObjCSection.git",
-            from: "0.5.2"
+            url: "https://github.com/p-x9/MachOObjCSection.git",
+            from: "0.6.0"
         ),
     )
 }
