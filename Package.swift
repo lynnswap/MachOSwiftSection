@@ -173,7 +173,7 @@ extension Package.Dependency {
         ),
         remote: .package(
             url: "https://github.com/lynnswap/MachOObjCSection.git",
-            from: "0.6.1"
+            from: "0.6.2"
         ),
     )
 }
