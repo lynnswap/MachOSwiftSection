@@ -71,7 +71,7 @@ extension Package.Dependency {
     }
 }
 
-let MachOKitVersion: Version = "0.42.0"
+let MachOKitVersion: Version = "0.47.0"
 
 let isSilentTest = envEnable("MACHO_SWIFT_SECTION_SILENT_TEST", default: false)
 
@@ -103,12 +103,12 @@ var dependencies: [Package.Dependency] = [
     .package(url: "https://github.com/lynnswap/FrameworkToolbox.git", from: "0.3.3"),
     
     .package(url: "https://github.com/MxIris-Library-Forks/swift-memberwise-init-macro", from: "0.5.3-fork"),
-    .package(url: "https://github.com/lynnswap/SourceKitD.git", from: "0.1.0"),
-    .package(url: "https://github.com/christophhagen/BinaryCodable", from: "3.1.0"),
+//    .package(url: "https://github.com/lynnswap/SourceKitD.git", from: "0.1.0"),
+//    .package(url: "https://github.com/christophhagen/BinaryCodable", from: "3.1.0"),
     
     .package(url: "https://github.com/pointfreeco/swift-dependencies", from: "1.9.4"),
-    .package(url: "https://github.com/MxIris-DeveloperTool-Forks/swift-clang", from: "0.1.0"),
-    .package(url: "https://github.com/lynnswap/swift-apinotes.git", from: "0.1.0"),
+//    .package(url: "https://github.com/MxIris-DeveloperTool-Forks/swift-clang", from: "0.1.0"),
+//    .package(url: "https://github.com/lynnswap/swift-apinotes.git", from: "0.1.0"),
     .package(url: "https://github.com/lynnswap/DyldPrivate.git", from: "0.1.0"),
     
     // CLI
@@ -146,7 +146,7 @@ extension Package.Dependency {
         ),
         remote: .package(
             url: "https://github.com/lynnswap/MachOKit.git",
-            from: "0.45.1"
+            from: "0.47.0"
         ),
     )
 }
@@ -162,7 +162,7 @@ extension Package.Dependency {
 
     static let MachOObjCSectionOrigin = Package.Dependency.package(
         url: "https://github.com/p-x9/MachOObjCSection.git",
-        from: "0.5.0"
+        from: "0.6.0"
     )
 
     static let MachOObjCSectionMain = Package.Dependency.package(
@@ -173,7 +173,7 @@ extension Package.Dependency {
         ),
         remote: .package(
             url: "https://github.com/lynnswap/MachOObjCSection.git",
-            from: "0.5.2"
+            from: "0.6.2"
         ),
     )
 }
@@ -418,21 +418,21 @@ extension Target {
         ]
     )
 
-    static let TypeIndexing = Target.target(
-        name: "TypeIndexing",
-        dependencies: [
-            .target(.SwiftInterface),
-            .target(.Utilities),
-            .product(.SwiftSyntax),
-            .product(.SwiftParser),
-            .product(.SwiftSyntaxBuilder),
-            .product(.MachOObjCSection),
-            .product(name: "Clang", package: "swift-clang"),
-            .product(name: "SourceKitD", package: "SourceKitD", condition: .when(platforms: [.macOS])),
-            .product(name: "BinaryCodable", package: "BinaryCodable"),
-            .product(name: "APINotes", package: "swift-apinotes", condition: .when(platforms: [.macOS])),
-        ]
-    )
+//    static let TypeIndexing = Target.target(
+//        name: "TypeIndexing",
+//        dependencies: [
+//            .target(.SwiftInterface),
+//            .target(.Utilities),
+//            .product(.SwiftSyntax),
+//            .product(.SwiftParser),
+//            .product(.SwiftSyntaxBuilder),
+//            .product(.MachOObjCSection),
+//            .product(name: "Clang", package: "swift-clang"),
+//            .product(name: "SourceKitD", package: "SourceKitD", condition: .when(platforms: [.macOS])),
+//            .product(name: "BinaryCodable", package: "BinaryCodable"),
+//            .product(name: "APINotes", package: "swift-apinotes", condition: .when(platforms: [.macOS])),
+//        ]
+//    )
 
     static let swift_section = Target.executableTarget(
         name: "swift-section",
@@ -514,14 +514,14 @@ extension Target {
         swiftSettings: testSettings
     )
 
-    static let TypeIndexingTests = Target.testTarget(
-        name: "TypeIndexingTests",
-        dependencies: [
-            .target(.TypeIndexing),
-            .target(.MachOTestingSupport),
-        ],
-        swiftSettings: testSettings
-    )
+//    static let TypeIndexingTests = Target.testTarget(
+//        name: "TypeIndexingTests",
+//        dependencies: [
+//            .target(.TypeIndexing),
+//            .target(.MachOTestingSupport),
+//        ],
+//        swiftSettings: testSettings
+//    )
 
     static let SwiftInterfaceTests = Target.testTarget(
         name: "SwiftInterfaceTests",
@@ -548,7 +548,7 @@ let package = Package(
         .library(.MachOSwiftSection),
         .library(.SwiftDump),
         .library(.SwiftInterface),
-        .library(.TypeIndexing),
+//        .library(.TypeIndexing),
         .executable(.swift_section),
     ],
     dependencies: dependencies,
@@ -572,7 +572,7 @@ let package = Package(
         .SwiftDump,
         .SwiftIndex,
         .SwiftInterface,
-        .TypeIndexing,
+//        .TypeIndexing,
         .MachOMacros,
         .MachOTestingSupport,
 
@@ -585,7 +585,7 @@ let package = Package(
         .MachOSwiftSectionTests,
         .SwiftInspectionTests,
         .SwiftDumpTests,
-        .TypeIndexingTests,
+//        .TypeIndexingTests,
         .SwiftInterfaceTests,
         .SemanticTests,
     ]
