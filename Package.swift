@@ -871,7 +871,7 @@ let package = Package(
         .library(.SwiftIndexing),
         .library(.SwiftPrinting),
         .library(.SwiftSpecialization),
-        .library(.SwiftInterface),
+        .library(name: Target.SwiftInterface.name, type: .static, targets: [Target.SwiftInterface.name]),
 //        .library(.TypeIndexing),
         .executable(.swift_section),
     ],
