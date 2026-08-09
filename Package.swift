@@ -203,8 +203,8 @@ extension Package.Dependency {
             isRelative: true
         ),
         remote: .package(
-            url: "https://github.com/MxIris-Reverse-Engineering/MachOObjCSection.git",
-            from: "0.6.100"
+            url: "https://github.com/lynnswap/MachOObjCSection.git",
+            revision: "8cda6e11eb83928ca2e31085db152e69a6001d59"
         ),
     )
 }
