@@ -632,13 +632,15 @@
   `SwiftInspectionTests`（三个 witness overload 的 Optional / non-optional 契约 +
   generic pointer probe + kind-0x02 `MangledName`/MachOImage E2E）。下游 fork cohort
   期间，remote `MachOObjCSection` fallback 与 PrivateHeaderKit 共用
-  `lynnswap@7d159a0`，避免 SwiftPM 的 duplicate identity；本地 sibling 优先不变。
+  `lynnswap@7d159a0`，并在 Issue #60 中前移到 `lynnswap@ecc84fb`，避免 SwiftPM 的
+  duplicate identity；`USING_LOCAL_DEPENDENCIES=1` 时的本地 sibling 优先级不变。
   三个 constrained public declaration 被删除，但相同 call signature 由
   unconditional witness 提供，源码兼容、不承诺二进制 ABI。
 - **验证**：新增 5 tests 全绿；fresh worktree 重建并 ad-hoc 签名
   `SymbolTestsCore` fixture 后，`swift test --skip IntegrationTests --quiet` 为
-  1359 tests / 253 suites 全绿；cohort 对齐后再次保持 1359 / 253 全绿，且
-  `show-dependencies` 不再报告 duplicate identity；未运行 IntegrationTests、未改 baseline。
+  1359 tests / 253 suites 全绿；`7d159a0` cohort 对齐后再次保持 1359 / 253 全绿。
+  Issue #60 的 `ecc84fb` follow-up 重新 resolve 单一 identity，并在 ad-hoc fixture 重建后
+  再次通过 1359 / 253；未运行 IntegrationTests、未改 baseline。
 - **文档**：[NullIndirectSymbolicReferenceResolution.md](NullIndirectSymbolicReferenceResolution.md)、
   [evolution 0005](../Evolutions/0005-null-indirect-symbolic-reference-resolution.md)、
   [TaskReports/2026-08-18-null-indirect-symbolic-reference-resolution.md](TaskReports/2026-08-18-null-indirect-symbolic-reference-resolution.md)。

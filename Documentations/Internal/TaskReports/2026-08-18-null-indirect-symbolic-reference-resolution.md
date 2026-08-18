@@ -111,6 +111,12 @@ consumer 的一般升级版本。RuntimeViewer 当前直接固定官方 MachOObj
 无 duplicate-identity warning，resolved checkout 为精确 SHA `7d159a0`；随后
 `swift test --skip IntegrationTests --quiet` 为 1359 tests / 253 suites 全绿。
 
+后续 Issue #60 沿用同一 cohort contract，把 remote fallback 前移到
+`ecc84fb790509fb71f4c1f0bd2fb6e4bac6069df`。这是 dependency-only 对齐；本报告上述
+`7d159a0` 验证仍是原任务当时的历史记录。follow-up 重新 resolve 后只存在一个
+`machoobjcsection` identity，checkout 为 `ecc84fb`；ad-hoc 重建 `SymbolTestsCore` fixture 后，
+`swift test --skip IntegrationTests --quiet` 再次通过 1359 tests / 253 suites。
+
 ## 文档
 
 - [NullIndirectSymbolicReferenceResolution.md](../NullIndirectSymbolicReferenceResolution.md)

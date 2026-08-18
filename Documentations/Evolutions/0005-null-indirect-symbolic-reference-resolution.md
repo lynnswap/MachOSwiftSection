@@ -104,3 +104,8 @@ upstream URL 与 fork URL 引入，本 fork 的 remote fallback 也固定到
 RuntimeViewer 仍直接固定官方 MachOObjCSection；若要采用这一临时 revision，必须在同一
 变更中把其 direct dependency 也切到相同 fork SHA。当前范围只服务于显式固定该 SHA 的
 PrivateHeaderKit，因此不改 RuntimeViewer。
+
+2026-08-18 的后续 Issue #60 把同一 safety cohort 前移到 `ecc84fb`，以支持 dyld
+cache-wide canonical protocol 的 direct-name recovery。source identity、
+`USING_LOCAL_DEPENDENCIES=1` 时的 local sibling 优先级、PrivateHeaderKit-only 范围与撤回条件
+均不变。
