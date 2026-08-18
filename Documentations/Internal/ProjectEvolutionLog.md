@@ -636,6 +636,8 @@
   duplicate identity；Issue #62 又把同一 cohort 前移到 `lynnswap@e8fdf4e`，以采用
   loaded relative protocol list-of-lists 的 ABI-correct plural reader；Issue #65 再前移到
   `lynnswap@9880258`，让 relative method/property lists 共用同一 checked outer owner。
+  watchOS 27 runtime smoke 后续再前移到 `lynnswap@932bff2`，接受 count 为 0 的合法空
+  member list，而非空 list 的结构验证不变。
   `USING_LOCAL_DEPENDENCIES=1` 时的本地 sibling 优先级不变。
   三个 constrained public declaration 被删除，但相同 call signature 由
   unconditional witness 提供，源码兼容、不承诺二进制 ABI。
@@ -644,7 +646,8 @@
   1359 tests / 253 suites 全绿；`7d159a0` cohort 对齐后再次保持 1359 / 253 全绿。
   Issue #60 的 `ecc84fb` follow-up 重新 resolve 单一 identity，并在 ad-hoc fixture 重建后
   再次通过 1359 / 253。Issue #62 的 `e8fdf4e` follow-up 验证记录见同任务报告；未运行
-  IntegrationTests、未改 baseline。Issue #65 的 `9880258` follow-up 结果也追加到同任务报告。
+  IntegrationTests、未改 baseline。Issue #65 的 `9880258` 与 `932bff2` follow-up 结果也追加到
+  同任务报告。
 - **文档**：[NullIndirectSymbolicReferenceResolution.md](NullIndirectSymbolicReferenceResolution.md)、
   [evolution 0005](../Evolutions/0005-null-indirect-symbolic-reference-resolution.md)、
   [TaskReports/2026-08-18-null-indirect-symbolic-reference-resolution.md](TaskReports/2026-08-18-null-indirect-symbolic-reference-resolution.md)。

@@ -118,3 +118,7 @@ runtime ABI 遍历全部 loaded relative protocol lists，不再要求 class own
 2026-08-19 的 Issue #65 继续把 cohort 前移到 `9880258`。该 revision 把相同的 loaded-entry
 契约扩展到 relative method/property lists，并新增独立的 member-list Diagnostics SPI。
 source identity、local sibling 条件、PrivateHeaderKit-only 范围与撤回条件仍不变。
+
+同日 runtime smoke 后把 cohort 继续前移到 `932bff2`。该 follow-up 接受 count 为 0、
+entry size 未使用的合法空 member list，同时保持非空 list 的 size/alignment/range 验证。
+`9880258` 的记录继续代表首次 member-list 集成，不回写历史验证。

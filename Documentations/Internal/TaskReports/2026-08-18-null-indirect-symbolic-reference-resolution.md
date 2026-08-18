@@ -141,6 +141,13 @@ ignored `Package.resolved` 固定 `9880258`。以 `CODE_SIGN_IDENTITY=-` 构建�
 `SymbolTestsCore` fixture 后，同一 `swift test --skip IntegrationTests --quiet` gate 再次为
 1359 tests / 253 suites 全绿。未运行 IntegrationTests、未改 baseline。
 
+watchOS 27 CoreFoundation runtime smoke 显示 loaded empty method list 使用
+`entsizeAndFlags = 3, count = 0`。Issue #65 因此以 follow-up
+`932bff230815e39901e825e419db588377edee5c` 把 count 检查移到未使用 entry size/alignment
+之前；非空 list 的验证顺序不变。`USING_LOCAL_DEPENDENCIES=0` 的 remote graph 继续只有一个
+`machoobjcsection` identity，ignored `Package.resolved` 固定 `932bff2`。相同 silent/remote
+gate 为 1359 tests / 253 suites 全绿。未运行 IntegrationTests、未改 baseline。
+
 ## 文档
 
 - [NullIndirectSymbolicReferenceResolution.md](../NullIndirectSymbolicReferenceResolution.md)
