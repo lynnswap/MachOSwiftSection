@@ -130,6 +130,17 @@ AGENTS 的 environment-drift 手顺以 `CODE_SIGN_IDENTITY=-` 重建 fixture 后
 `swift test --skip IntegrationTests --quiet`，1359 tests / 253 suites 全绿。未运行
 IntegrationTests、未改 baseline。
 
+同日 Issue #65 把 remote fallback 前移到
+`988025869eed737d35b49f9489389e23bbaad4c1`。该 commit 从 protocol path 抽出 neutral
+relative-list outer owner，让 method/property lists 共享 loaded filtering、ordered partial
+outcome 与 bounds，并以 additive member diagnostics 保持既有 protocol SPI consumer。
+`7d159a0`、`ecc84fb`、`e8fdf4e` 的记录继续保留为各阶段的历史验证。
+
+`USING_LOCAL_DEPENDENCIES=0` 的 remote graph 继续只有一个 `machoobjcsection` identity，
+ignored `Package.resolved` 固定 `9880258`。以 `CODE_SIGN_IDENTITY=-` 构建该 worktree 的
+`SymbolTestsCore` fixture 后，同一 `swift test --skip IntegrationTests --quiet` gate 再次为
+1359 tests / 253 suites 全绿。未运行 IntegrationTests、未改 baseline。
+
 ## 文档
 
 - [NullIndirectSymbolicReferenceResolution.md](../NullIndirectSymbolicReferenceResolution.md)

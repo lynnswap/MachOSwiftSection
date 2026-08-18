@@ -114,3 +114,7 @@ cache-wide canonical protocol 的 direct-name recovery。source identity、
 runtime ABI 遍历全部 loaded relative protocol lists，不再要求 class owner image entry。
 这仍是相同的 PrivateHeaderKit-only exact-pin cohort；本提案原有 null-reference 实现与
 历史验证记录不变。
+
+2026-08-19 的 Issue #65 继续把 cohort 前移到 `9880258`。该 revision 把相同的 loaded-entry
+契约扩展到 relative method/property lists，并新增独立的 member-list Diagnostics SPI。
+source identity、local sibling 条件、PrivateHeaderKit-only 范围与撤回条件仍不变。
