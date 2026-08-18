@@ -11,7 +11,9 @@ Documentation is split by audience.
 > Evolution proposals live in [`Evolutions/`](Evolutions/README.md) (status table + numbering there).
 > Proposals 0001–0003 (the memory-optimization line) live on the `feature/node-store-migration`
 > branch and are not on main yet; [0004](Evolutions/0004-arm64e-signed-vwt-pointer-hardening.md)
-> (arm64e signed VWT pointer hardening) is the first proposal landed on main.
+> (arm64e signed VWT pointer hardening) is the first proposal landed on main,
+> followed by [0005](Evolutions/0005-null-indirect-symbolic-reference-resolution.md)
+> (single-witness null indirect symbolic-reference resolution).
 
 ## External — for library users / other developers
 
@@ -66,6 +68,7 @@ required by `Version.swift`'s bump contract).
 | [ProtocolRequirementProjection.md](Internal/ProtocolRequirementProjection.md) | stripped protocol requirement（PWT slot）投影（`pwtslot:` 命名空间、flags 指纹 payload、中段插入的诚实级联、符号化状态不对称局限）+ remangle 回退键自识别（`unmangled:` 前缀）与 `remangleFallbacks()` 审计通道；key scheme v4。 |
 | [DefaultImplementationAwareCompatibility.md](Internal/DefaultImplementationAwareCompatibility.md) | 默认实现感知的兼容性判定：`ProtocolDefinition.defaultedRequirementPWTOffsets`（描述符相对指针，不经符号表，stripped 侧同样精确）、`MemberRecord.hasDefaultImplementation`（仅 verdict 元数据，经 PWT offset 关联已解析成员）、`MemberChange` / `LineageEvent` 的 `compatibilityOverride`（defaultless requirement 追加判 breaking，stripped slot 获得默认实现判 additive）；formatVersion 5。 |
 | [MetadataReaderRefactoring.md](Internal/MetadataReaderRefactoring.md) | `MetadataReader` refactoring plan. |
+| [NullIndirectSymbolicReferenceResolution.md](Internal/NullIndirectSymbolicReferenceResolution.md) | `SymbolOrElementPointer` 的空 indirect slot 契约：为何 constrained overload 在 protocol-generic 路径不是 witness、Optional 空值如何在唯一无约束 witness 中解析，以及 kind `0x02` 的确定性回归测试。对应 evolution proposal [0005](Evolutions/0005-null-indirect-symbolic-reference-resolution.md)。 |
 | [RuntimeEnumCaseProjection.md](Internal/RuntimeEnumCaseProjection.md) | 基于 value witness 的枚举 case 内存图样投影：为什么「只知道 XI 个数」推不出单 payload 空 case 的判别字节（`Text.Style.LineStyle` 反馈案例），`RuntimeEnumCaseProjector` 的双基线注入 + `getEnumTag` 回读校验机制，`EnumCaseProjection` 模型重构（`declaredName` / `isPayloadCase` / `patternResolution`）与可读化渲染，runtime 精确 / static 诚实降级的两路接线；arm64e 签名 VWT 槽的 `stripPointerTags` 修复与「`swift test` 的 arm64e 测试进程 PAC 不生效」验证陷阱（提案 0004）。 |
 | [EnumLayoutAuditFixes.md](Internal/EnumLayoutAuditFixes.md) | 对照 Swift 官方源码（`EnumImpl.h` / `Enum.cpp` / `GenEnum.cpp` / `TypeLowering.cpp`）的枚举布局全面审计与五项修复：indirect 单 payload 的 heap-pointer XI（曾被误判为 overflow 布局）、枚举自身 VWT 的 size 交叉校验与 payloadXI 精确反推、spare-bits payload case 的位级 `fixedBitMasks`（不再整字节过度声明）、empty case 判别区完整记录（tagged 零扩展 + spare-bits 全位固定）、no-payload XI 封顶；runtime 对拍测试增量与 RuntimeViewerCore token 同步。 |
 | [OutputTransformerMigration.md](Internal/OutputTransformerMigration.md) | `Transformer` 模板机制的 Swift 侧（注释 token 模板 + 预设）从 RuntimeViewerCore 迁入库侧的新 `OutputTransformer` 模块（ObjC 侧 CType/ivarOffset 暂留 RV）：架构（模块清单、宽容 Codable 持久化契约、SwiftInspection 桥接、闭包工厂 + `applyTransformers` 接线）、RV 兼容语义（auto-append、partial-mask 安全回退）、RV 侧收编为 `@_exported` shim + 一行接线。 |

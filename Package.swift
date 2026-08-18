@@ -801,6 +801,7 @@ extension Target {
     static let SwiftInspectionTests = Target.testTarget(
         name: "SwiftInspectionTests",
         dependencies: [
+            .product(.MachOKit),
             .target(.MachOSwiftSection),
             .target(.MachOTestingSupport),
             .target(.MachOFixtureSupport),

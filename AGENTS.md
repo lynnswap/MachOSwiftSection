@@ -184,6 +184,10 @@ Printing and indexing are peers — neither depends on the other.
 - **MachOReading** - File reading abstractions
 - **MachOResolving** - Address/offset resolution
 - **MachOSymbols** - Symbol table parsing and demangling
+- **MachOSymbolPointers** - Bind/rebase-aware symbol-or-element slots; its
+  unconditional `RelativeIndirectType` witness owns null indirect-slot
+  semantics (`OptionalProtocol` element → `.element(.none)`, otherwise
+  `ReadingError.invalidAddress(0)`) before any address conversion or read
 - **MachOPointers** - Pointer types (relative, indirect, etc.)
 - **MachOCaches** - dyld shared cache support
 - **MachOExtensions** - Extensions to MachOKit types
@@ -198,7 +202,13 @@ for descriptor in descriptors {
 }
 ```
 
-**Relative Pointers**: Swift uses position-independent relative offsets. The `RelativeDirectPointer<T>` and related types handle resolution.
+**Relative Pointers**: Swift uses position-independent relative offsets. The
+`RelativeDirectPointer<T>` and related types handle resolution. For indirect
+symbol-or-element pointers, do not put nullable behavior in a constrained
+overload: calls through `RelativeIndirectPointerProtocol` use the conformance
+witness. `SymbolOrElementPointer` therefore handles a zero slot in its single
+unconditional witness path; see
+[Documentations/Internal/NullIndirectSymbolicReferenceResolution.md](Documentations/Internal/NullIndirectSymbolicReferenceResolution.md).
 
 **Node-based Demangling**: Mangled symbols parse to `Node` trees, then print via `NodePrinter`:
 ```swift

@@ -612,6 +612,35 @@
 
 ---
 
+## 28. 空间接符号引用的单一 witness 解析契约
+
+- **时间段**：2026-08-18。
+- **动机**：iOS 27 Simulator 的 `FoundationModels.framework` 在 Swift interface
+  渲染中解析 indirect context symbolic reference 时 SIGSEGV。间接槽值为 0，
+  但 Optional 语义写在 constrained overload；generic
+  `RelativeIndirectPointerProtocol` 路径使用无约束 witness，遂把 0 转成地址并在
+  `MachOImage.readWrapperElement` 解引用。`MetadataReader` 的 catch 无法捕捉
+  memory fault。
+- **关键决策**：invariant owner 留在
+  `MachOSymbolPointers.SymbolOrElementPointer` 的真实 `RelativeIndirectType`
+  witness。三个无约束 `resolve` 在任何转换/读取前处理 0：现有
+  `OptionalProtocol` element 生成 `.element(.none)`，non-optional 抛
+  `ReadingError.invalidAddress(0)`；删除条件重载，结构上消除 direct / generic
+  分派再次分叉的可能。不在 `MetadataReader` 或 framework 名上加 guard，不扩
+  public API。
+- **落地模块**：`MachOSymbolPointers`（单一 null witness）、
+  `SwiftInspectionTests`（generic pointer probe + nonoptional error + kind-0x02
+  `MangledName`/MachOImage E2E）。生产依赖图和所有 public signature 不变。
+- **验证**：新增 3 tests 全绿；fresh worktree 重建并 ad-hoc 签名
+  `SymbolTestsCore` fixture 后，`swift test --skip IntegrationTests --quiet` 为
+  1357 tests / 254 suites 全绿；未运行 IntegrationTests、未改 baseline。
+- **文档**：[NullIndirectSymbolicReferenceResolution.md](NullIndirectSymbolicReferenceResolution.md)、
+  [evolution 0005](../Evolutions/0005-null-indirect-symbolic-reference-resolution.md)、
+  [TaskReports/2026-08-18-null-indirect-symbolic-reference-resolution.md](TaskReports/2026-08-18-null-indirect-symbolic-reference-resolution.md)。
+- **对应版本**：`0.15.2` 之后、下一次 bump 之前（本批不 bump）。
+
+---
+
 ## 维护约定
 
 1. **每个非平凡批次结束时必须在本文追加/更新一节**（新工作弧新增一节；延续既有弧则在该节

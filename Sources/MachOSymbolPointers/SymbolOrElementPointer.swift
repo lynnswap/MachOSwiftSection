@@ -21,6 +21,8 @@ public enum SymbolOrElementPointer<Element: Resolvable>: RelativeIndirectType {
         switch self {
         case .symbol:
             fatalError()
+        case .address(let address) where stripPointerTags(of: address).uint == 0:
+            return try resolvedNullElement()
         case .address(let address):
             return try .element(Element.resolve(from: .init(bitPattern: stripPointerTags(of: address).uint)))
         }
@@ -30,6 +32,8 @@ public enum SymbolOrElementPointer<Element: Resolvable>: RelativeIndirectType {
         switch self {
         case .symbol(let unsolvedSymbol):
             return .symbol(unsolvedSymbol)
+        case .address(let address) where machO.stripPointerTags(of: address) == 0:
+            return try resolvedNullElement()
         case .address:
             return try .element(Element.resolve(from: resolveOffset(in: machO), in: machO))
         }
@@ -39,6 +43,8 @@ public enum SymbolOrElementPointer<Element: Resolvable>: RelativeIndirectType {
         switch self {
         case .symbol(let unsolvedSymbol):
             return .symbol(unsolvedSymbol)
+        case .address(let address) where address == 0:
+            return try resolvedNullElement()
         case .address:
             return try .element(Element.resolve(at: resolveAddress(in: context), in: context))
         }
@@ -102,39 +108,13 @@ public enum SymbolOrElementPointer<Element: Resolvable>: RelativeIndirectType {
         }
         return try .address(context.readElement(at: address))
     }
-}
 
-extension SymbolOrElementPointer where Element: OptionalProtocol {
-    public func resolve() throws -> Resolved {
-        switch self {
-        case .symbol:
-            fatalError()
-        case .address(let address) where stripPointerTags(of: address).uint == 0:
-            return .element(.none)
-        case .address(let address):
-            return try .element(Element.resolve(from: .init(bitPattern: stripPointerTags(of: address).uint)))
+    private func resolvedNullElement() throws -> Resolved {
+        guard let optionalType = Element.self as? any OptionalProtocol.Type,
+              let element = optionalType.none as? Element
+        else {
+            throw ReadingError.invalidAddress(0)
         }
-    }
-
-    public func resolve<MachO: MachORepresentableWithCache & Readable>(in machO: MachO) throws -> Resolved {
-        switch self {
-        case .symbol(let unsolvedSymbol):
-            return .symbol(unsolvedSymbol)
-        case .address(let address) where machO.stripPointerTags(of: address) == 0:
-            return .element(.none)
-        case .address:
-            return try .element(Element.resolve(from: resolveOffset(in: machO), in: machO))
-        }
-    }
-
-    public func resolve<Context: ReadingContext>(in context: Context) throws -> Resolved {
-        switch self {
-        case .symbol(let unsolvedSymbol):
-            return .symbol(unsolvedSymbol)
-        case .address(let address) where address == 0:
-            return .element(.none)
-        case .address:
-            return try .element(Element.resolve(at: resolveAddress(in: context), in: context))
-        }
+        return .element(element)
     }
 }
