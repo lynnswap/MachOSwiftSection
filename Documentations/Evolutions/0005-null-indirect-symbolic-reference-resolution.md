@@ -92,3 +92,10 @@ nullability protocol。
 ## 发布
 
 本批不 bump 版本、不写 changelog。后续 release 按正常版本流程收录。
+
+下游 PrivateHeaderKit 同时直接依赖 MachOSwiftSection 与尚未发布的
+MachOObjCSection protocol-metadata safety fix。为避免同一 SwiftPM identity 同时由
+upstream URL 与 fork URL 引入，本 fork 的 remote fallback 也固定到
+`lynnswap/MachOObjCSection@7d159a0216565edae417bf40716dd447bf295e7b`。
+本地 sibling checkout 仍优先；这只是未发布修复期间的 remote cohort 对齐，后续两项
+修复进入正式 release 后一并恢复官方 URL / version requirement。

@@ -630,12 +630,15 @@
   public API。
 - **落地模块**：`MachOSymbolPointers`（单一 null witness）、
   `SwiftInspectionTests`（三个 witness overload 的 Optional / non-optional 契约 +
-  generic pointer probe + kind-0x02 `MangledName`/MachOImage E2E）。生产依赖图
-  不变；三个 constrained public declaration 被删除，但相同 call signature 由
+  generic pointer probe + kind-0x02 `MangledName`/MachOImage E2E）。下游 fork cohort
+  期间，remote `MachOObjCSection` fallback 与 PrivateHeaderKit 共用
+  `lynnswap@7d159a0`，避免 SwiftPM 的 duplicate identity；本地 sibling 优先不变。
+  三个 constrained public declaration 被删除，但相同 call signature 由
   unconditional witness 提供，源码兼容、不承诺二进制 ABI。
 - **验证**：新增 5 tests 全绿；fresh worktree 重建并 ad-hoc 签名
   `SymbolTestsCore` fixture 后，`swift test --skip IntegrationTests --quiet` 为
-  1359 tests / 253 suites 全绿；未运行 IntegrationTests、未改 baseline。
+  1359 tests / 253 suites 全绿；cohort 对齐后再次保持 1359 / 253 全绿，且
+  `show-dependencies` 不再报告 duplicate identity；未运行 IntegrationTests、未改 baseline。
 - **文档**：[NullIndirectSymbolicReferenceResolution.md](NullIndirectSymbolicReferenceResolution.md)、
   [evolution 0005](../Evolutions/0005-null-indirect-symbolic-reference-resolution.md)、
   [TaskReports/2026-08-18-null-indirect-symbolic-reference-resolution.md](TaskReports/2026-08-18-null-indirect-symbolic-reference-resolution.md)。

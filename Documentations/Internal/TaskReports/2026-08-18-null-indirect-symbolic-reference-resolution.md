@@ -90,6 +90,22 @@ ABI 保证。
 - 未运行 `Tests/IntegrationTests`，未重录任何 baseline。
 - `git diff --check`：通过。
 
+## 下游 fork cohort 对齐
+
+PrivateHeaderKit 随后的 Objective-C protocol metadata 修复需要直接固定
+`lynnswap/MachOObjCSection@7d159a0216565edae417bf40716dd447bf295e7b`。如果本 package
+继续从 MxIris URL 引入同一 identity，SwiftPM 会报告 `Conflicting identity for
+machoobjcsection`，并明确提示该 warning 将来会成为 error。
+
+因此 remote fallback 改为同一 lynnswap URL 与 exact revision；本地 sibling 优先规则
+不变。`swift package show-dependencies` 用于验证 graph 只剩一个
+`machoobjcsection` source。没有为此建立 upstream PR；正式 release 可用后，下游应把
+两个临时 fork pin 作为同一 cohort 一并撤回。
+
+验证结果：`swift package --force-resolved-versions show-dependencies --format json`
+无 duplicate-identity warning，resolved checkout 为精确 SHA `7d159a0`；随后
+`swift test --skip IntegrationTests --quiet` 为 1359 tests / 253 suites 全绿。
+
 ## 文档
 
 - [NullIndirectSymbolicReferenceResolution.md](../NullIndirectSymbolicReferenceResolution.md)

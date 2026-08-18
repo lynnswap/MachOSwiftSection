@@ -182,16 +182,12 @@ extension Package.Dependency {
             isRelative: true,
         ),
         remote: .package(
-            url: "https://github.com/MxIris-Reverse-Engineering/MachOObjCSection.git",
-            // A range rather than `exact:`. RuntimeViewer depends on this
-            // package and on MachOObjCSection directly, so an exact requirement
-            // here deadlocks resolution the moment the app moves to a newer
-            // patch: two `exact:` requirements on one package have no solution
-            // regardless of source compatibility. The lower bound is `0.8.104`
-            // because `0.8.103` moved the ObjC relationship reverse tables out
-            // of `ObjCIndexing`; the upper bound stops at the next minor, where
-            // that line is free to break again.
-            "0.8.104" ..< "0.9.0",
+            url: "https://github.com/lynnswap/MachOObjCSection.git",
+            // Keep the unreleased protocol-metadata safety fix on the same
+            // source identity as downstream packages that import both products.
+            // Mixing this dependency's upstream URL with a downstream fork URL
+            // makes SwiftPM diagnose a conflicting package identity.
+            revision: "7d159a0216565edae417bf40716dd447bf295e7b",
         ),
     )
 }
