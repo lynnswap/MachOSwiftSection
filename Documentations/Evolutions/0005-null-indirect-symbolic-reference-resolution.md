@@ -1,7 +1,7 @@
 # 0005 - 空间接符号引用的单一 witness 解析契约
 
 - **状态**: Implemented
-- **作者**: JH
+- **作者**: Kazuki Nakashima
 - **创建日期**: 2026-08-18
 - **最后更新**: 2026-08-18
 - **所属愿景**: 无
@@ -39,8 +39,9 @@ Optional 表达「间接槽可以为空」，但 `SymbolOrElementPointer` 把空
 ### 1. Owner 留在 `SymbolOrElementPointer` 的真实 conformance witness
 
 三个既有无约束 `resolve` 方法（context-free / MachO / ReadingContext）先检查
-`.address(0)`，再走原有非零逻辑。公开类型、方法签名、symbol 分支和非零分支
-全部不变。
+`.address(0)`，再走原有非零逻辑。公开泛型类型、symbol 分支和非零分支不变；
+三个 public constrained overload declaration 被删除，但相同 call signature 继续
+由无约束 witness 提供，源码调用保持可编译。
 
 ### 2. 复用现有 `OptionalProtocol`，不扩 public API
 
@@ -68,7 +69,9 @@ nullability protocol。
 
 ## 兼容性
 
-- 无 public declaration 变化，源码兼容。
+- 三个 public constrained overload declaration 被删除；相同 call signature 仍由
+  unconditional witness 提供。本库从源码分发，现有调用保持源码兼容；不承诺二进制
+  ABI 兼容。
 - Optional 空槽从崩溃变为既有模型中的 `.element(nil)`。
 - 非 Optional 空槽从非法内存访问变为 `ReadingError.invalidAddress(0)`。
 - 非零地址、bind/rebase symbol 与 context-free symbol 行为不变。
@@ -79,6 +82,8 @@ nullability protocol。
   `RelativeIndirectPointerProtocol` 路径断言 `.element(nil)`，并记录 reader 未收到
   address-zero 读取/转换。
 - 同形状 non-optional pointer 断言 `ReadingError.invalidAddress(0)`。
+- `SymbolOrElementPointer.address(0)` 分别经 generic `RelativeIndirectType` 的
+  context-free / MachO witness，固定 Optional 与 non-optional 两侧的同一契约。
 - 合成 kind `0x02` 的 `MangledName`，用 `MachOImage` 进入 `MetadataReader`，断言
   `DemanglingError.requiredNonOptional`，不再 exit 139。
 - 运行受影响测试、`swift test --skip IntegrationTests` 与 `git diff --check`；不运行

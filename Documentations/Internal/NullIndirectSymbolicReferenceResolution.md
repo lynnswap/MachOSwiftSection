@@ -27,10 +27,11 @@ caller nor `MetadataReader` should duplicate that interpretation.
 
 The invariant is:
 
-> Every public resolution route for `SymbolOrElementPointer` observes a zero
-> address before address conversion or element reads. If `Element` can
-> represent absence, zero resolves to `.element(.none)`; otherwise resolution
-> throws `ReadingError.invalidAddress(0)`.
+> Every public element-resolution `resolve` overload on
+> `SymbolOrElementPointer` observes a zero address before address conversion or
+> element reads. If `Element` can represent absence, zero resolves to
+> `.element(.none)`; otherwise resolution throws
+> `ReadingError.invalidAddress(0)`.
 
 The same unconditional `RelativeIndirectType` witnesses enforce the invariant
 for context-free, `MachORepresentableWithCache`, and `ReadingContext` calls.
@@ -39,12 +40,15 @@ generic dispatch cannot diverge.
 
 ## Design
 
-The public generic type and all public method signatures remain unchanged.
-Each unconditional witness adds a zero-address case before the existing
-nonzero case. A private helper checks whether `Element.Type` conforms to the
-existing `OptionalProtocol`, obtains its `none` value through that checked
-existential, and casts the value back to `Element`. The cast is checked rather
-than forced; failure and genuinely non-optional elements use the existing
+The public generic type remains unchanged. The three public constrained
+overload declarations are removed, but each of their call signatures remains
+available through the unconditional conformance witness, so existing source
+calls keep compiling when the package is rebuilt. Each unconditional witness
+adds a zero-address case before the existing nonzero case. A private helper
+checks whether `Element.Type` conforms to the existing `OptionalProtocol`,
+obtains its `none` value through that checked existential, and casts the value
+back to `Element`. The cast is checked rather than forced; failure and
+genuinely non-optional elements use the existing
 `ReadingError.invalidAddress(0)` error.
 
 This approach is intentionally local:
@@ -65,14 +69,21 @@ today.
 Deterministic tests use synthetic storage and readers rather than system
 framework fixtures:
 
-1. A nonzero relative pointer lands on a pointer-sized zero slot and resolves
+1. `SymbolOrElementPointer.address(0)` resolves through the generic
+   `RelativeIndirectType.resolve()` witness: optional elements produce
+   `.element(nil)` and non-optional elements throw
+   `ReadingError.invalidAddress(0)`.
+2. The same value resolves through generic
+   `RelativeIndirectType.resolve(in: MachO)`, with the same optional and
+   non-optional results before image-relative conversion.
+3. A nonzero relative pointer lands on a pointer-sized zero slot and resolves
    `RelativeIndirectSymbolOrElementPointer<ContextDescriptorWrapper?>` through
    the generic `RelativeIndirectPointerProtocol` route. The result is
    `.element(nil)`, and an instrumented reading context proves that no
    address-zero read or conversion occurred.
-2. The same zero slot with a non-optional element throws
+4. The same zero slot with a non-optional element throws
    `ReadingError.invalidAddress(0)` before a zero-address read.
-3. A synthetic indirect context symbolic reference (`0x02`) is demangled
+5. A synthetic indirect context symbolic reference (`0x02`) is demangled
    through `MetadataReader` with an in-process `MachOImage`. The null slot is
    converted into the demangler's bounded
    `DemanglingError.requiredNonOptional` failure instead of terminating the
@@ -83,10 +94,12 @@ is neither used nor run.
 
 ## Compatibility and limitations
 
-This is source-compatible: no public declaration changes. For non-optional
-zero slots, the previous behavior was an invalid memory access; the new
-behavior is a typed read error. For optional zero slots, the result now matches
-the constrained overload's documented intent.
+This is source-compatible: although the three constrained public declarations
+are removed, the same call signatures remain available on the unconditional
+witness, and this package is distributed from source. No binary ABI guarantee
+is made. For non-optional zero slots, the previous behavior was an invalid
+memory access; the new behavior is a typed read error. For optional zero slots,
+the result now matches the constrained overload's documented intent.
 
 The change does not attempt to recover a missing context descriptor. A null
 symbolic reference remains unresolved, so the demangler reports its existing

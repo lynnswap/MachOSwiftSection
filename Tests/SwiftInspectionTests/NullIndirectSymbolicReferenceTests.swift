@@ -5,8 +5,52 @@ import Testing
 @testable import MachOSwiftSection
 @testable @_spi(Internals) import SwiftInspection
 
-@Suite("Null indirect symbolic references")
-struct NullIndirectSymbolicReferenceTests {
+extension MetadataReaderDemanglingTests {
+    @Test("context-free witness preserves optional and nonoptional zero contracts")
+    func contextFreeWitnessPreservesZeroContracts() throws {
+        let optionalPointer = SymbolOrElementPointer<ContextDescriptorWrapper?>.address(0)
+        let optionalResolved = try resolveThroughIndirectType(optionalPointer)
+
+        if case .element(.none) = optionalResolved {
+            // Expected: the optional element owns the null representation.
+        } else {
+            Issue.record("expected the zero address to resolve as .element(nil), got \(optionalResolved)")
+        }
+
+        let nonoptionalPointer = SymbolOrElementPointer<ContextDescriptorWrapper>.address(0)
+        do {
+            _ = try resolveThroughIndirectType(nonoptionalPointer)
+            Issue.record("expected ReadingError.invalidAddress(0)")
+        } catch ReadingError.invalidAddress(let address) {
+            #expect(address == 0)
+        } catch {
+            Issue.record("expected ReadingError.invalidAddress(0), got \(error)")
+        }
+    }
+
+    @Test("MachO witness preserves optional and nonoptional zero contracts")
+    func machOWitnessPreservesZeroContracts() throws {
+        let machO = MachOImage.current()
+        let optionalPointer = SymbolOrElementPointer<ContextDescriptorWrapper?>.address(0)
+        let optionalResolved = try resolveThroughIndirectType(optionalPointer, in: machO)
+
+        if case .element(.none) = optionalResolved {
+            // Expected: no image-relative address conversion is needed for null.
+        } else {
+            Issue.record("expected the zero address to resolve as .element(nil), got \(optionalResolved)")
+        }
+
+        let nonoptionalPointer = SymbolOrElementPointer<ContextDescriptorWrapper>.address(0)
+        do {
+            _ = try resolveThroughIndirectType(nonoptionalPointer, in: machO)
+            Issue.record("expected ReadingError.invalidAddress(0)")
+        } catch ReadingError.invalidAddress(let address) {
+            #expect(address == 0)
+        } catch {
+            Issue.record("expected ReadingError.invalidAddress(0), got \(error)")
+        }
+    }
+
     @Test("generic indirect resolution preserves optional null semantics")
     func genericIndirectResolutionPreservesOptionalNullSemantics() throws {
         let probe = AddressAccessProbe()
@@ -75,6 +119,19 @@ struct NullIndirectSymbolicReferenceTests {
             Issue.record("expected DemanglingError.requiredNonOptional, got \(error)")
         }
     }
+}
+
+private func resolveThroughIndirectType<IndirectType: RelativeIndirectType>(
+    _ pointer: IndirectType
+) throws -> IndirectType.Resolved {
+    try pointer.resolve()
+}
+
+private func resolveThroughIndirectType<IndirectType: RelativeIndirectType, MachO: MachORepresentableWithCache & Readable>(
+    _ pointer: IndirectType,
+    in machO: MachO
+) throws -> IndirectType.Resolved {
+    try pointer.resolve(in: machO)
 }
 
 private func resolveThroughProtocol<Pointer: RelativeIndirectPointerProtocol, Context: ReadingContext>(

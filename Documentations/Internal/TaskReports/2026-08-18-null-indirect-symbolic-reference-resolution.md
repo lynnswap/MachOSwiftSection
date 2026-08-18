@@ -38,7 +38,8 @@ owner 固定为 `MachOSymbolPointers.SymbolOrElementPointer` 的真实无约束
    后再受检转回 `Element`；成功返回 `.element(.none)`。
 3. non-optional 或转换失败时抛既有 `ReadingError.invalidAddress(0)`。
 4. 删除整段 Optional 条件重载，让 direct / generic dispatch 不再有两套 owner。
-5. public 类型与方法签名、symbol 分支、非零地址分支全部保持不变。
+5. public 泛型类型、symbol 分支、非零地址分支保持不变；三个 constrained public
+   declaration 被删除，但相同 call signature 由无约束 witness 继续提供。
 
 明确不做 `MetadataReader` / `FoundationModels` guard，也不改
 `RelativeIndirectPointerProtocol` 的通用算法。
@@ -47,8 +48,13 @@ owner 固定为 `MachOSymbolPointers.SymbolOrElementPointer` 的真实无约束
 
 - `Sources/MachOSymbolPointers/SymbolOrElementPointer.swift`：三条 witness 路径
   接入 `resolvedNullElement()`，删除条件重载。
-- `Tests/SwiftInspectionTests/NullIndirectSymbolicReferenceTests.swift`：新增 3 个
-  完全合成、不依赖 OS framework fixture 的测试：
+- `Tests/SwiftInspectionTests/NullIndirectSymbolicReferenceTests.swift`：在 CI 已有
+  `MetadataReaderDemanglingTests` suite 上以 extension 新增 5 个完全合成、不依赖
+  OS framework fixture 的测试；文件保持按回归主题独立，但 suite owner 与
+  `.github/workflows/macOS.yml` 的既有 filter 一致：
+  - `.address(0)` 经 generic `RelativeIndirectType.resolve()`，固定 optional
+    `.element(nil)` 与 non-optional `ReadingError.invalidAddress(0)`。
+  - 同一个值经 generic `RelativeIndirectType.resolve(in: MachO)`，固定同一两侧契约。
   - 非零 relative pointer 指向 `UInt64(0)`，经 generic protocol helper 解析为
     `.element(nil)`；probe 只记录槽地址读取，0 地址转换列表为空。
   - 同形状 non-optional element 精确抛 `ReadingError.invalidAddress(0)`，仍无 0
@@ -61,12 +67,16 @@ owner 固定为 `MachOSymbolPointers.SymbolOrElementPointer` 的真实无约束
 - 文档同步：设计文档、evolution proposal 0005、演进日志、README 索引与
   AGENTS architecture。
 
-实现与设计契约一致，无 public API 偏差。
+实现与设计契约一致。三个 constrained public overload declaration 被删除，但同一
+call signature 由 unconditional witness 提供；源码分发下现有调用兼容，不作二进制
+ABI 保证。
 
 ## 验证
 
-- `swift test --filter NullIndirectSymbolicReferenceTests`：3 tests / 1 suite，
-  通过。
+- `swift test --filter MetadataReaderDemanglingTests`：9 tests / 1 suite，既有
+  suite 连同 5 个新增 regression tests 一起通过。
+- CI 的原样 filter `swift test --filter '\.MetadataReaderDemanglingTests(/|$)'`
+  同样执行 9 tests / 1 suite；workflow 无需修改。
 - 初次 `swift test --skip IntegrationTests` 在 fresh worktree 发现唯一共同根因：
   gitignored 的 `SymbolTestsCore.framework` fixture 不存在，853 个 fixture 测试随之
   失败；这不是 product diff。
@@ -75,7 +85,7 @@ owner 固定为 `MachOSymbolPointers.SymbolOrElementPointer` 的真实无约束
   baseline，改用 `CODE_SIGN_IDENTITY=-` 的 `Sign to Run Locally` ad-hoc 签名
   重建后，相关 2 suites / 8 tests 恢复全绿，确认是 fixture link/signing layout，
   不是本批实现。
-- 最终 `swift test --skip IntegrationTests --quiet`：1357 tests / 254 suites，
+- 最终 `swift test --skip IntegrationTests --quiet`：1359 tests / 253 suites，
   全部通过。
 - 未运行 `Tests/IntegrationTests`，未重录任何 baseline。
 - `git diff --check`：通过。

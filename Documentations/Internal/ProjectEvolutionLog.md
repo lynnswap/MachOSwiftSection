@@ -629,11 +629,13 @@
   分派再次分叉的可能。不在 `MetadataReader` 或 framework 名上加 guard，不扩
   public API。
 - **落地模块**：`MachOSymbolPointers`（单一 null witness）、
-  `SwiftInspectionTests`（generic pointer probe + nonoptional error + kind-0x02
-  `MangledName`/MachOImage E2E）。生产依赖图和所有 public signature 不变。
-- **验证**：新增 3 tests 全绿；fresh worktree 重建并 ad-hoc 签名
+  `SwiftInspectionTests`（三个 witness overload 的 Optional / non-optional 契约 +
+  generic pointer probe + kind-0x02 `MangledName`/MachOImage E2E）。生产依赖图
+  不变；三个 constrained public declaration 被删除，但相同 call signature 由
+  unconditional witness 提供，源码兼容、不承诺二进制 ABI。
+- **验证**：新增 5 tests 全绿；fresh worktree 重建并 ad-hoc 签名
   `SymbolTestsCore` fixture 后，`swift test --skip IntegrationTests --quiet` 为
-  1357 tests / 254 suites 全绿；未运行 IntegrationTests、未改 baseline。
+  1359 tests / 253 suites 全绿；未运行 IntegrationTests、未改 baseline。
 - **文档**：[NullIndirectSymbolicReferenceResolution.md](NullIndirectSymbolicReferenceResolution.md)、
   [evolution 0005](../Evolutions/0005-null-indirect-symbolic-reference-resolution.md)、
   [TaskReports/2026-08-18-null-indirect-symbolic-reference-resolution.md](TaskReports/2026-08-18-null-indirect-symbolic-reference-resolution.md)。
