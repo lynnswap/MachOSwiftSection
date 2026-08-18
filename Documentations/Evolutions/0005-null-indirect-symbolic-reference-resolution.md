@@ -99,3 +99,8 @@ upstream URL 与 fork URL 引入，本 fork 的 remote fallback 也固定到
 `lynnswap/MachOObjCSection@7d159a0216565edae417bf40716dd447bf295e7b`。
 本地 sibling checkout 仍优先；这只是未发布修复期间的 remote cohort 对齐，后续两项
 修复进入正式 release 后一并恢复官方 URL / version requirement。
+
+该 revision 不进入 tag / general release，也不作为 RuntimeViewer 的升级点。
+RuntimeViewer 仍直接固定官方 MachOObjCSection；若要采用这一临时 revision，必须在同一
+变更中把其 direct dependency 也切到相同 fork SHA。当前范围只服务于显式固定该 SHA 的
+PrivateHeaderKit，因此不改 RuntimeViewer。

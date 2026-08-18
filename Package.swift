@@ -186,7 +186,10 @@ extension Package.Dependency {
             // Keep the unreleased protocol-metadata safety fix on the same
             // source identity as downstream packages that import both products.
             // Mixing this dependency's upstream URL with a downstream fork URL
-            // makes SwiftPM diagnose a conflicting package identity.
+            // makes SwiftPM diagnose a conflicting package identity. This
+            // untagged fork revision is a PrivateHeaderKit-only cohort; do not
+            // publish it as a general RuntimeViewer upgrade without co-pinning
+            // RuntimeViewer's direct MachOObjCSection dependency.
             revision: "7d159a0216565edae417bf40716dd447bf295e7b",
         ),
     )
