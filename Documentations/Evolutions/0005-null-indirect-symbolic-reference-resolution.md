@@ -109,3 +109,8 @@ PrivateHeaderKit，因此不改 RuntimeViewer。
 cache-wide canonical protocol 的 direct-name recovery。source identity、
 `USING_LOCAL_DEPENDENCIES=1` 时的 local sibling 优先级、PrivateHeaderKit-only 范围与撤回条件
 均不变。
+
+2026-08-19 的后续 Issue #62 再把该 cohort 前移到 `e8fdf4e`。新 revision 按 Objective-C
+runtime ABI 遍历全部 loaded relative protocol lists，不再要求 class owner image entry。
+这仍是相同的 PrivateHeaderKit-only exact-pin cohort；本提案原有 null-reference 实现与
+历史验证记录不变。

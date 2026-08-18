@@ -117,6 +117,19 @@ consumer 的一般升级版本。RuntimeViewer 当前直接固定官方 MachOObj
 `machoobjcsection` identity，checkout 为 `ecc84fb`；ad-hoc 重建 `SymbolTestsCore` fixture 后，
 `swift test --skip IntegrationTests --quiet` 再次通过 1359 tests / 253 suites。
 
+2026-08-19 的 Issue #62 继续沿用同一 source-identity contract，把 remote fallback 前移到
+`e8fdf4edc8f91aa46ef50f85932c1cb7690885af`。该 revision 聚合所有 loaded relative
+protocol lists，并移除 owner-image entry 的错误前提；本报告中 `7d159a0` / `ecc84fb` 的
+记录仍分别代表当时已执行的历史验证。
+
+`USING_LOCAL_DEPENDENCIES=0` 的 remote dependency graph 只有一个
+`machoobjcsection` identity，ignored `Package.resolved` 固定 `e8fdf4e`。新 worktree 首次运行
+因缺少 machine-local `SymbolTestsCore` fixture 失败；按
+AGENTS 的 environment-drift 手顺以 `CODE_SIGN_IDENTITY=-` 重建 fixture 后，
+在 `MACHO_SWIFT_SECTION_SILENT_TEST=1` / `USING_LOCAL_DEPENDENCIES=0` 环境运行
+`swift test --skip IntegrationTests --quiet`，1359 tests / 253 suites 全绿。未运行
+IntegrationTests、未改 baseline。
+
 ## 文档
 
 - [NullIndirectSymbolicReferenceResolution.md](../NullIndirectSymbolicReferenceResolution.md)
