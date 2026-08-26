@@ -183,14 +183,14 @@ extension Package.Dependency {
         ),
         remote: .package(
             url: "https://github.com/lynnswap/MachOObjCSection.git",
-            // Keep the unreleased protocol-metadata safety fix on the same
+            // Keep the unreleased Objective-C metadata safety fixes on the same
             // source identity as downstream packages that import both products.
             // Mixing this dependency's upstream URL with a downstream fork URL
             // makes SwiftPM diagnose a conflicting package identity. This
             // untagged fork revision is a PrivateHeaderKit-only cohort; do not
             // publish it as a general RuntimeViewer upgrade without co-pinning
             // RuntimeViewer's direct MachOObjCSection dependency.
-            revision: "0d17e3d77556991dc128aa92547ea1b1ea8f9e2e",
+            revision: "41a1652d95c34bbb2fdf32ba4b7f5cd9d3ba20ba",
         ),
     )
 }
