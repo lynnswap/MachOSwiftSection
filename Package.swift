@@ -190,7 +190,7 @@ extension Package.Dependency {
             // untagged fork revision is a PrivateHeaderKit-only cohort; do not
             // publish it as a general RuntimeViewer upgrade without co-pinning
             // RuntimeViewer's direct MachOObjCSection dependency.
-            revision: "41a1652d95c34bbb2fdf32ba4b7f5cd9d3ba20ba",
+            revision: "8f0ff76f02c0865422a72662177b5e687e43522d",
         ),
     )
 }
