@@ -27,7 +27,7 @@ actor BinarySession {
         lazy var fieldLayoutProvider: MachOFileStaticFieldLayoutProvider? = {
             let resolution: StaticLayoutDependencyResolution = cachePath.map {
                 .dependencyClosure(searchPaths: [.dyldSharedCache(path: $0)])
-            } ?? .default
+            } ?? .singleImage
             return MachOFileStaticFieldLayoutProvider(machOFile: machO, resolution: resolution)
         }()
     }

@@ -142,11 +142,9 @@ struct ToolHandler: Sendable {
         var configuration = DumperConfiguration.demangleOptions(.default)
         configuration.printFieldOffset = includeFieldOffsets
         if includeFieldOffsets {
-            if let cachePath {
-                configuration.staticLayoutDependencyResolution = .dependencyClosure(
-                    searchPaths: [.dyldSharedCache(path: cachePath)]
-                )
-            }
+            configuration.staticLayoutDependencyResolution = cachePath.map {
+                .dependencyClosure(searchPaths: [.dyldSharedCache(path: $0)])
+            } ?? .singleImage
             configuration.staticFieldLayoutProvider = provider
         }
 

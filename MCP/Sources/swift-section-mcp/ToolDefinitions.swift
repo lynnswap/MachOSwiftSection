@@ -108,7 +108,7 @@ enum ToolDefinitions {
                 ]),
                 "includeFieldOffsets": .object([
                     "type": "boolean",
-                    "description": "Include field offset comments in the output",
+                    "description": "Include field offset comments using the opened cache, or only the opened file when no cache was selected. Cross-image layouts may be unavailable for standalone files.",
                 ]),
             ]),
             "required": .array([.string("name")]),
