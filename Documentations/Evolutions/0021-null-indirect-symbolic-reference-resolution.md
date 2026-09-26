@@ -1,4 +1,27 @@
-# 0005 - 空间接符号引用的单一 witness 解析契约
+# 0021 - 空间接符号引用的单一 witness 解析契约
+
+## PrivateHeaderKit reader cohort on upstream 0.19.0
+
+The current remote dependency graph pins `lynnswap/MachOKit` at
+`8d451ca2e9d108f0a2024758b33b25e8faa2adbb`, `lynnswap/MachOObjCSection` at
+`5576f1e1f53ed88faf4e71c781246f7ec1cd1b24`, and `lynnswap/swift-apinotes` at
+`6ad58901a18a9bc6d5a80ab8afedb372d13acd4f`. These supersede the earlier cohort
+revisions recorded below. The reader pins retain bounded metadata diagnostics
+and self-bind resolution; the APINotes pin aligns Apple platform minima with
+MetaCodable so SwiftPM can validate Simulator builds. Downstream consumers
+that declare the readers directly must use the same repository identities and
+revisions.
+
+On this cohort, PrivateHeaderKit passed 668 default tests and file-backed
+AdSupport, BrowserKit, SensorKit, and MetricKit integration cases on iOS 27.0
+and 27.1, with no Objective-C metadata diagnostics. Its iOS and watchOS
+Simulator helper products built successfully. The focused null-reference, PAC,
+and CLI tests passed. The broader local Swift reader run reported seven
+fixed-address fixture mismatches; the current compiler build differs from the
+upstream CI build, and those baselines were not rewritten.
+
+Tracking: [PrivateHeaderKit #102](https://github.com/lynnswap/PrivateHeaderKit/issues/102).
+
 
 - **状态**: Implemented
 - **作者**: Kazuki Nakashima

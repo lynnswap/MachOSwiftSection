@@ -118,3 +118,11 @@ jobs:
             --enable-experimental-prebuilts \
             --build-path .build-test-${{ matrix.configuration }} \
             --filter '\.(Arm64eSignedVWTPointerTests|DiffOutputTests|SymbolTestsCoreDumpSnapshotTests|SymbolTestsCoreInterfaceSnapshotTests|SymbolTestsCoreCoverageInvariantTests|STCoreE2ETests|STCoreTests|GenericSpecializationTests|MultiPayloadEnumTests|MetadataReaderDemanglingTests|DependencyLoadNameTests|DependencyClosureTests|FileDependencyLocatorTests|SwiftInterfaceBuilderDependenciesTests|ManglingPrefixTests|MethodDescriptorTests|MethodOverrideDescriptorTests|MethodDefaultOverrideDescriptorTests|ProtocolRequirementTests|ResilientWitnessTests|LargeStackTaskExecutionTests|BoundedConcurrentMapTests|SwiftEvolutionInterfaceBuilderTests|EvolutionCommandValidationTests|DiffCommandValidationTests)(/|$)'
+
+      - name: Build MCP field-layout fixture
+        run: swiftc -emit-library -module-name MCPFixture MCP/Fixtures/FieldLayoutFixture.swift -o "$RUNNER_TEMP/libMCPFixture.dylib"
+
+      - name: Test MCP package (${{ matrix.configuration }})
+        env:
+          MCP_FIELD_LAYOUT_FIXTURE: ${{ runner.temp }}/libMCPFixture.dylib
+        run: swift test --package-path MCP -c ${{ matrix.configuration }} --scratch-path .build-test-${{ matrix.configuration }}

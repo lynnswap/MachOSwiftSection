@@ -1321,7 +1321,16 @@
 
 ---
 
-## 28. 空间接符号引用的单一 witness 解析契约
+## 57. 空间接符号引用的单一 witness 解析契约
+
+### Current cohort on upstream 0.19.0
+
+MachOKit `8d451ca2e9d108f0a2024758b33b25e8faa2adbb`, MachOObjCSection
+`5576f1e1f53ed88faf4e71c781246f7ec1cd1b24`, and APINotes
+`6ad58901a18a9bc6d5a80ab8afedb372d13acd4f` supersede the revisions below.
+The rationale and current validation are recorded in
+[proposal 0021](../Evolutions/0021-null-indirect-symbolic-reference-resolution.md#privateheaderkit-reader-cohort-on-upstream-0190).
+
 
 - **时间段**：2026-08-18。
 - **动机**：iOS 27 Simulator 的 `FoundationModels.framework` 在 Swift interface
@@ -1331,13 +1340,13 @@
   `MachOImage.readWrapperElement` 解引用。`MetadataReader` 的 catch 无法捕捉
   memory fault。
 - **关键决策**：invariant owner 留在
-  `MachOSymbolPointers.SymbolOrElementPointer` 的真实 `RelativeIndirectType`
+  `MachOPointers.SymbolOrElementPointer` 的真实 `RelativeIndirectType`
   witness。三个无约束 `resolve` 在任何转换/读取前处理 0：现有
   `OptionalProtocol` element 生成 `.element(.none)`，non-optional 抛
   `ReadingError.invalidAddress(0)`；删除条件重载，结构上消除 direct / generic
   分派再次分叉的可能。不在 `MetadataReader` 或 framework 名上加 guard，不扩
   public API。
-- **落地模块**：`MachOSymbolPointers`（单一 null witness）、
+- **落地模块**：`MachOPointers`（单一 null witness）、
   `SwiftInspectionTests`（三个 witness overload 的 Optional / non-optional 契约 +
   generic pointer probe + kind-0x02 `MangledName`/MachOImage E2E）。下游 fork cohort
   期间，remote `MachOObjCSection` fallback 与 PrivateHeaderKit 共用
@@ -1358,7 +1367,7 @@
   IntegrationTests、未改 baseline。Issue #65 的 `9880258` 与 `932bff2` follow-up 结果也追加到
   同任务报告。
 - **文档**：[NullIndirectSymbolicReferenceResolution.md](NullIndirectSymbolicReferenceResolution.md)、
-  [evolution 0005](../Evolutions/draft-null-indirect-symbolic-reference-resolution.md)、
+  [evolution 0021](../Evolutions/0021-null-indirect-symbolic-reference-resolution.md)、
   [TaskReports/2026-08-18-null-indirect-symbolic-reference-resolution.md](TaskReports/2026-08-18-null-indirect-symbolic-reference-resolution.md)。
 - **对应版本**：`0.15.2` 之后、下一次 bump 之前（本批不 bump）。
 

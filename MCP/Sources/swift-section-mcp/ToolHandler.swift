@@ -118,7 +118,7 @@ struct ToolHandler: Sendable {
     }
 
     private func handleDumpType(_ args: [String: Value]?) async throws -> String {
-        let machO = try await session.requireMachO()
+        let (machO, cachePath) = try await session.requireBinary()
         guard let name = args?["name"]?.stringValue else {
             throw ToolError.missingArgument("name")
         }
@@ -142,6 +142,11 @@ struct ToolHandler: Sendable {
         var configuration = DumperConfiguration.demangleOptions(.default)
         configuration.printFieldOffset = includeFieldOffsets
         if includeFieldOffsets {
+            if let cachePath {
+                configuration.staticLayoutDependencyResolution = .dependencyClosure(
+                    searchPaths: [.dyldSharedCache(path: cachePath)]
+                )
+            }
             configuration.staticFieldLayoutProvider = MachOFileStaticFieldLayoutProvider(
                 machOFile: machO,
                 resolution: configuration.staticLayoutDependencyResolution

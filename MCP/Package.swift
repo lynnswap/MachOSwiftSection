@@ -92,6 +92,7 @@ let package = Package(
             name: "swift-section-mcp",
             dependencies: [
                 .product(name: "SwiftDump", package: "MachOSwiftSection"),
+                .product(name: "MachOFoundation", package: "MachOSwiftSection"),
                 .product(name: "SwiftDeclarationRendering", package: "MachOSwiftSection"),
                 .product(name: "SwiftInterface", package: "MachOSwiftSection"),
                 .product(name: "MachOSwiftSection", package: "MachOSwiftSection"),

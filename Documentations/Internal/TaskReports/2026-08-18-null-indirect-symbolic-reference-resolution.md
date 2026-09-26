@@ -1,5 +1,13 @@
 # 2026-08-18 · 空间接符号引用的 witness 分派修复
 
+## Current reader cohort
+
+The revisions and validation for the upstream 0.19.0 integration are recorded
+in [proposal 0021](../../Evolutions/0021-null-indirect-symbolic-reference-resolution.md#privateheaderkit-reader-cohort-on-upstream-0190).
+They supersede the historical cohort revisions below. The pointer implementation
+now belongs to `MachOPointers`.
+
+
 ## 问题
 
 iOS 27 Simulator 的 `FoundationModels.framework` 在 interface 渲染阶段
@@ -29,7 +37,7 @@ interface 无法产出。
 
 ## 最终方案
 
-owner 固定为 `MachOSymbolPointers.SymbolOrElementPointer` 的真实无约束
+owner 固定为 `MachOPointers.SymbolOrElementPointer` 的真实无约束
 `RelativeIndirectType` witness：
 
 1. context-free、MachO、ReadingContext 三个 `resolve` 都在任何地址转换/读取前
@@ -46,7 +54,7 @@ owner 固定为 `MachOSymbolPointers.SymbolOrElementPointer` 的真实无约束
 
 ## 实际执行
 
-- `Sources/MachOSymbolPointers/SymbolOrElementPointer.swift`：三条 witness 路径
+- `Sources/MachOPointers/SymbolOrElementPointer.swift`：三条 witness 路径
   接入 `resolvedNullElement()`，删除条件重载。
 - `Tests/SwiftInspectionTests/NullIndirectSymbolicReferenceTests.swift`：在 CI 已有
   `MetadataReaderDemanglingTests` suite 上以 extension 新增 5 个完全合成、不依赖
@@ -64,7 +72,7 @@ owner 固定为 `MachOSymbolPointers.SymbolOrElementPointer` 的真实无约束
     139。
 - `SwiftInspectionTests` 增加测试专用的直接 `MachOKit` product dependency，用于
   创建当前 `MachOImage`；生产 target 依赖图不变。
-- 文档同步：设计文档、evolution proposal 0005、演进日志、README 索引与
+- 文档同步：设计文档、evolution proposal 0021、演进日志、README 索引与
   AGENTS architecture。
 
 实现与设计契约一致。三个 constrained public overload declaration 被删除，但同一
@@ -151,4 +159,4 @@ gate 为 1359 tests / 253 suites 全绿。未运行 IntegrationTests、未改 ba
 ## 文档
 
 - [NullIndirectSymbolicReferenceResolution.md](../NullIndirectSymbolicReferenceResolution.md)
-- [0005 - 空间接符号引用的单一 witness 解析契约](../../Evolutions/draft-null-indirect-symbolic-reference-resolution.md)
+- [0021 - 空间接符号引用的单一 witness 解析契约](../../Evolutions/0021-null-indirect-symbolic-reference-resolution.md)

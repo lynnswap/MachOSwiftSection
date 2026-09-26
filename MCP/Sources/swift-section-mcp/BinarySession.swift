@@ -1,5 +1,6 @@
 import Foundation
 import MachOKit
+import MachOFoundation
 
 /// Manages the loaded Mach-O file state across tool calls.
 ///
@@ -8,6 +9,7 @@ import MachOKit
 actor BinarySession {
     private(set) var machOFile: MachOFile?
     private(set) var filePath: String?
+    private var cachePath: String?
 
     func load(path: String, architecture: String? = nil) throws -> String {
         var url = URL(fileURLWithPath: path)
@@ -33,6 +35,7 @@ actor BinarySession {
             }
             self.machOFile = machO
             self.filePath = path
+            self.cachePath = nil
             return describeBinary(machO, path: path)
         case .fat(let fatFile):
             let images = try fatFile.machOFiles()
@@ -45,6 +48,7 @@ actor BinarySession {
             guard let machO = selected else { throw SessionError.invalidArchitecture }
             self.machOFile = machO
             self.filePath = path
+            self.cachePath = nil
             return describeBinary(machO, path: path)
         }
     }
@@ -69,15 +73,9 @@ actor BinarySession {
 
         let machO: MachOFile?
         if let imageName {
-            machO = dyldCache.machOFiles().first {
-                let path = $0.imagePath
-                let fileName = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
-                return fileName == imageName
-            }
+            machO = dyldCache.machOFile(by: .name(imageName))
         } else if let imagePath {
-            machO = dyldCache.machOFiles().first {
-                $0.imagePath == imagePath
-            }
+            machO = dyldCache.machOFile(by: .path(imagePath))
         } else {
             throw SessionError.missingImageIdentifier
         }
@@ -88,14 +86,17 @@ actor BinarySession {
 
         self.machOFile = machO
         self.filePath = imageName ?? imagePath
+        self.cachePath = dyldCache.url.path
         return describeBinary(machO, path: self.filePath ?? "<dyld cache>")
     }
 
     func requireMachO() throws -> MachOFile {
-        guard let machOFile else {
-            throw SessionError.noBinaryLoaded
-        }
-        return machOFile
+        try requireBinary().machO
+    }
+
+    func requireBinary() throws -> (machO: MachOFile, cachePath: String?) {
+        guard let machOFile else { throw SessionError.noBinaryLoaded }
+        return (machOFile, cachePath)
     }
 
     private func describeBinary(_ machO: MachOFile, path: String) -> String {

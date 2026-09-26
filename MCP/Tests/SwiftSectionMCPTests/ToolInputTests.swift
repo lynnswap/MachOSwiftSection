@@ -4,9 +4,9 @@ import Testing
 @testable import swift_section_mcp
 
 struct ToolInputTests {
-    private func thinImage() -> Data {
+    private func thinImage(subtype: UInt32 = 0) -> Data {
         var data = Data()
-        for raw: UInt32 in [0xfeedfacf, 0x0100000c, 0, 6, 0, 0, 0, 0] {
+        for raw: UInt32 in [0xfeedfacf, 0x0100000c, subtype, 6, 0, 0, 0, 0] {
             var value = raw.littleEndian
             withUnsafeBytes(of: &value) { data.append(contentsOf: $0) }
         }
@@ -43,6 +43,15 @@ struct ToolInputTests {
         }
     }
 
+    @Test(arguments: [UInt32(0x80000002), UInt32(0x02000002)])
+    func arm64eCapabilityBitsAreAccepted(subtype: UInt32) async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: url) }
+        try thinImage(subtype: subtype).write(to: url)
+        let loaded = try await BinarySession().load(path: url.path, architecture: "arm64e")
+        #expect(loaded.contains("CPU_SUBTYPE_ARM64E"))
+    }
+
     @Test func conflictingSelectorsFailBeforeOpeningTheCache() async throws {
         let handler = ToolHandler(session: BinarySession())
         let result = await handler.handle(.init(name: "open_dyld_cache_image", arguments: [
@@ -51,6 +60,28 @@ struct ToolInputTests {
         ]))
         #expect(result.isError == true)
         #expect(try text(result).contains("not both"))
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["MCP_DYLD_CACHE_FIXTURE"] != nil))
+    func customCacheContextSurvivesFailedLoadsAndClearsForFiles() async throws {
+        let cachePath = try #require(ProcessInfo.processInfo.environment["MCP_DYLD_CACHE_FIXTURE"])
+        let session = BinarySession()
+        _ = try await session.loadFromDyldCache(imageName: "Foundation", cachePath: cachePath)
+        let opened = try await session.requireBinary()
+        #expect(opened.cachePath == URL(fileURLWithPath: cachePath).path)
+        do {
+            _ = try await session.loadFromDyldCache(imageName: "PHKNonexistentImage", cachePath: cachePath)
+            Issue.record("Expected a missing cache image")
+        } catch SessionError.imageNotFound {
+            let retained = try await session.requireBinary()
+            #expect(retained.machO === opened.machO)
+            #expect(retained.cachePath == opened.cachePath)
+        }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: url) }
+        try thinImage().write(to: url)
+        _ = try await session.load(path: url.path)
+        #expect(try await session.requireBinary().cachePath == nil)
     }
 
     @Test(.enabled(if: ProcessInfo.processInfo.environment["MCP_FIELD_LAYOUT_FIXTURE"] != nil))

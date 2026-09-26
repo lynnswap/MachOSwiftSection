@@ -21,7 +21,7 @@ SIGSEGV before `MetadataReader`'s error boundary could run.
 
 ## Ownership and invariant
 
-`MachOSymbolPointers.SymbolOrElementPointer` owns interpretation of the value
+`MachOPointers.SymbolOrElementPointer` owns interpretation of the value
 stored in an indirect symbol-or-element slot. Neither a framework-specific
 caller nor `MetadataReader` should duplicate that interpretation.
 
