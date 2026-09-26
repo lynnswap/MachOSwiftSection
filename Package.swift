@@ -107,7 +107,7 @@ var dependencies: [Package.Dependency] = [
     // TypeIndexing (all its sources are `#if os(macOS)`; both products carry
     // a macOS-only platform condition on the target dependency)
     .package(url: "https://github.com/Mx-Iris/SourceKitD", from: "0.1.0"),
-    .package(url: "https://github.com/MxIris-DeveloperTool/swift-apinotes", from: "0.1.0"),
+    .package(url: "https://github.com/lynnswap/swift-apinotes.git", revision: "6ad58901a18a9bc6d5a80ab8afedb372d13acd4f"),
 
     // CLI
     .package(url: "https://github.com/onevcat/Rainbow", from: "4.0.0"),
