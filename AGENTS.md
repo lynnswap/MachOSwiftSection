@@ -65,7 +65,7 @@ swift-section (CLI)
                                                     └── MachOFoundation
                                                             └── MachOSymbols, MachOPointers
                                                                     └── MachOReading, MachOResolving
-                                                                            └── MachOExtensions, MachOCaches
+                                                                            └── MachOKitExtensions, MachOCaches
                                                                                     └── MachOKit (external)
 ```
 
@@ -136,7 +136,7 @@ Printing and indexing are peers — neither depends on the other.
 
 **SwiftDiffing** - Binary ABI comparison across two or N versions (Mach-O-free: pure value computation over the indexed `SwiftDeclaration` model; depends only on `SwiftDeclaration` + `Demangling`)
 - `ABIDiffer` - Two-sided diff: keys every declaration on its remangled `Node` (`ABIKey`), recursive three-way set difference over types / protocols / four extension axes / globals. Extension containers are keyed **per (target, protocol, where fingerprint, retroactive)** — one conformance / conditional block per container (`extensionContainerSnapshots`; attribution frozen at index time onto `ExtensionDefinition.conformingProtocolName` / `genericSignature` / `resolvedAssociatedTypeWitnesses`), so a conformance add/remove is container-level, a where-clause or `@retroactive` change flips identity (removed+added), witness re-binding reports `.modified` (`assocwitness:` namespace), and the historical collision source is structurally gone. `MemberRecord` carries an `identityKey` (match) and a `payloadKey` (change detection: accessor set, field type, enum-case tag + `indirect` flag); a function's signature change is add+remove by design (different mangled symbol = different ABI entry point). `Compatibility` gives an additive/breaking verdict (treats every type as resilient — `@frozen` is not recoverable from the binary). Protocol containers also project their **symbol-stripped requirements** (the OS-framework norm) as `pwtslot:<offset>` records with the requirement flags (kind / isInstance / isAsync / hasDefaultImplementation) in the payload — a PWT-shape change is visible with zero symbols, a mid-table insertion honestly cascades the shifted slots, and stripped-ness being a symbolication state (not an ABI fact) is the documented caveat; the flag facts are Mach-O-free accessors on `StrippedSymbolicRequirement` so the module's `SwiftDeclaration`+`Demangling`-only dependency holds. Diagnostics are **surfaced, not silent**: `ABISnapshot.keyCollisions()` (first-wins key collisions) and `ABISnapshot.remangleFallbacks()` (keys carrying the self-identifying `unmangled:` remangle-fallback prefix, whose removed+added stories may be cross-toolchain identity flips) both ride on `ABIDiff.diagnostics` / `ABIEvolution.keyCollisionsByVersion`+`remangleFallbacksByVersion` + Warnings sections in both reporters
-- `ABISnapshot` / `ABISnapshotDocument` - Frozen `Codable` projection + the versioned persistence envelope (`formatVersion` — bump on any key-scheme change, decode fails typed on mismatch; currently 4: v2 folded `indirect` into enum-case keys, v3 split extension containers per conformance, v4 added `pwtslot:` protocol-requirement records and the `unmangled:` fallback prefix — plus `ABIProvenance`: label / binary path / generator version / date). `ABIJSON` is the one JSON dialect (ISO-8601, sorted keys) so baselines are byte-stable
+- `ABISnapshot` / `ABISnapshotDocument` - Frozen `Codable` projection + the versioned persistence envelope (`formatVersion` — bump on any key-scheme change, decode fails typed on mismatch; currently 5: v2 folded `indirect` into enum-case keys, v3 split extension containers per conformance, v4 added `pwtslot:` protocol-requirement records and the `unmangled:` fallback prefix, v5 added `hasDefaultImplementation` verdict metadata — plus `ABIProvenance`: label / binary path / generator version / date). `ABIJSON` is the one JSON dialect (ISO-8601, sorted keys) so baselines are byte-stable
 - `ABIEvolution` / `ABIEvolutionBuilder` / `ABIEvolutionReporter` - N ≥ 2 version lineage tracking: builds a key → per-version presence/payload matrix directly (not N−1 pairwise joins), producing per-declaration `ContainerLineage` / `MemberLineage` (presence bitmap + `LineageEvent`s at adjacent transitions). Member events exist only where the owning container is present on both adjacent versions (an added/removed container is the event itself, same rule as `ABIDiff`); for N == 2 the events match `ABIDiffer.diff` exactly (test-pinned). `transitionCompatibilities` extends the verdict per transition
 - CLI: `swift-section diff` (change-list / `--json` with provenance / annotated `--interface`; either side may be a snapshot JSON), `swift-section snapshot` (persist a baseline), `swift-section evolution` (N ordered inputs — binaries, dyld caches via `--dyld-shared-cache -n`, or snapshots mixed freely; `--labels`, `--summary-only`, `--json`, `--fail-on-breaking`). Input plumbing shared via `ABISnapshotInputLoader`
 - See [Documentations/Internal/ABIDiffDesignAndLimitations.md](Documentations/Internal/ABIDiffDesignAndLimitations.md), [Documentations/Internal/ABIEvolutionDesign.md](Documentations/Internal/ABIEvolutionDesign.md), [Documentations/Internal/PerConformanceAttribution.md](Documentations/Internal/PerConformanceAttribution.md), and [Documentations/Internal/ProtocolRequirementProjection.md](Documentations/Internal/ProtocolRequirementProjection.md)
@@ -190,7 +190,7 @@ Printing and indexing are peers — neither depends on the other.
   `ReadingError.invalidAddress(0)`) before any address conversion or read
 - **MachOPointers** - Pointer types (relative, indirect, etc.)
 - **MachOCaches** - dyld shared cache support
-- **MachOExtensions** - Extensions to MachOKit types
+- **MachOKitExtensions** - External package providing shared MachOKit extensions
 
 ### Key Patterns
 
@@ -281,15 +281,16 @@ Rule out both before attributing red tests to a code change:
    `-derivedDataPath Tests/Projects/SymbolTests/DerivedData/SymbolTests`).
    Note the binary is shared machine state — a parallel agent session may have
    rebuilt it from a different branch's sources.
-2. **Missing local sibling dependencies.** `Package.swift` declares
-   `../MachOKit`, `../MachOObjCSection`, `../swift-demangling`, and
-   `../swift-semantic-string` as *conditional local path* dependencies: they are
-   used when the sibling directory exists, else resolution silently falls back
-   to the remote release. A worktree checked out elsewhere (e.g. a scratchpad)
-   has no siblings and builds against older remote versions — output drifts
-   wholesale (e.g. `T?` printing as `Swift.Optional<T>`), invalidating any
-   cross-commit A/B comparison. For historical-baseline experiments, place or
-   symlink all four siblings next to the worktree first.
+2. **Missing or disabled local sibling dependencies.** Set
+   `USING_LOCAL_DEPENDENCIES=1` and provide the `../MachOKit`,
+   `../MachOObjCSection`, `../MachOKitExtensions`, `../swift-demangling`, and
+   `../swift-semantic-string` siblings when comparing against local sources.
+   The flag is off by default; a sibling's presence alone does not enable it.
+   Package copies under `/checkouts/`, `/SourcePackages/`, or `/.build/` always
+   use remote dependencies, so place comparison worktrees outside those paths.
+   Missing siblings still fall back to the pinned remote dependencies; verify
+   the resolved graph before attributing snapshot changes to the reader.
+
 
 ## Work In Progress
 

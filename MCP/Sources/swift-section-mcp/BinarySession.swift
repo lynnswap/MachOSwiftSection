@@ -14,26 +14,35 @@ actor BinarySession {
         if let executableURL = Bundle(url: url)?.executableURL {
             url = executableURL
         }
+        let targetCPU: CPUSubType?
+        if let architecture {
+            switch architecture.lowercased() {
+            case "arm64": targetCPU = .arm64(.arm64_all)
+            case "arm64e": targetCPU = .arm64(.arm64e)
+            case "x86_64": targetCPU = .x86(.x86_64_all)
+            default: throw SessionError.invalidArchitecture
+            }
+        } else {
+            targetCPU = nil
+        }
         let file = try MachOKit.loadFromFile(url: url)
         switch file {
         case .machO(let machO):
+            if let targetCPU, machO.header.cpu.subtype != targetCPU {
+                throw SessionError.invalidArchitecture
+            }
             self.machOFile = machO
             self.filePath = path
             return describeBinary(machO, path: path)
         case .fat(let fatFile):
-            let targetCPU: CPUSubType? = architecture.flatMap { archString in
-                switch archString.lowercased() {
-                case "arm64": return .arm64(.arm64_all)
-                case "arm64e": return .arm64(.arm64e)
-                case "x86_64": return .x86(.x86_64_all)
-                default: return nil
-                }
+            let images = try fatFile.machOFiles()
+            let selected: MachOFile?
+            if let targetCPU {
+                selected = images.first { $0.header.cpu.subtype == targetCPU }
+            } else {
+                selected = images.first { $0.header.cpu.subtype == CPU.current?.subtype } ?? images.first
             }
-            guard let machO = try fatFile.machOFiles().first(where: {
-                $0.header.cpu.subtype == targetCPU ?? CPU.current?.subtype
-            }) ?? fatFile.machOFiles().first else {
-                throw SessionError.invalidArchitecture
-            }
+            guard let machO = selected else { throw SessionError.invalidArchitecture }
             self.machOFile = machO
             self.filePath = path
             return describeBinary(machO, path: path)
@@ -45,6 +54,9 @@ actor BinarySession {
         imagePath: String? = nil,
         cachePath: String? = nil
     ) throws -> String {
+        guard imageName == nil || imagePath == nil else {
+            throw SessionError.conflictingImageIdentifiers
+        }
         let dyldCache: DyldCache
         if let cachePath {
             let url = URL(fileURLWithPath: cachePath)
@@ -100,6 +112,7 @@ enum SessionError: LocalizedError {
     case invalidArchitecture
     case dyldCacheNotAvailable
     case missingImageIdentifier
+    case conflictingImageIdentifiers
     case imageNotFound
 
     var errorDescription: String? {
@@ -112,6 +125,8 @@ enum SessionError: LocalizedError {
             "The system dyld shared cache is not available."
         case .missingImageIdentifier:
             "Either imageName or imagePath must be provided."
+        case .conflictingImageIdentifiers:
+            "Provide either imageName or imagePath, not both."
         case .imageNotFound:
             "The specified image was not found in the dyld shared cache."
         }

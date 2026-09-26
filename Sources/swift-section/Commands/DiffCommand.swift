@@ -116,7 +116,7 @@ struct DiffCommand: AsyncParsableCommand {
                 let encoded = String(decoding: try ABIJSON.encoder().encode(diff), as: UTF8.self)
                 try emitPlain(encoded)
             } else if summaryOnly {
-                print(verdict)
+                try emitPlain(verdict)
             } else {
                 try emitPlain(ABIDiffReporter().report(diff) + "\n\n" + verdict)
             }

@@ -74,15 +74,7 @@ extension Package.Dependency {
     }
 }
 
-let MachOKitVersion: Version = "0.46.1"
-
 let isSilentTest = envEnable("MACHO_SWIFT_SECTION_SILENT_TEST", default: false)
-
-let useSPMPrebuildVersion = envEnable("MACHO_SWIFT_SECTION_USE_SPM_PREBUILD_VERSION", default: false)
-
-let useCustomMachOKit = envEnable("USE_CUSTOM_MACHOKIT", default: true)
-
-let useCustomObjCSection = envEnable("USE_CUSTOM_OBJC_SECTION", default: true)
 
 let useSwiftTUI = envEnable("MACHO_SWIFT_SECTION_USE_SWIFTTUI", default: false)
 
@@ -120,29 +112,7 @@ var dependencies: [Package.Dependency] = [
 ]
 
 extension Package.Dependency {
-    static let MachOKit: Package.Dependency = {
-        if useSPMPrebuildVersion {
-            return .MachOKitSPM
-        } else {
-            if useCustomMachOKit {
-                return .MachOKitMain
-            } else {
-                return .MachOKitOrigin
-            }
-        }
-    }()
-
-    static let MachOKitOrigin = Package.Dependency.package(
-        url: "https://github.com/p-x9/MachOKit.git",
-        exact: MachOKitVersion,
-    )
-
-    static let MachOKitSPM = Package.Dependency.package(
-        url: "https://github.com/p-x9/MachOKit-SPM.git",
-        from: MachOKitVersion,
-    )
-
-    static let MachOKitMain = Package.Dependency.package(
+    static let MachOKit = Package.Dependency.package(
         local: .package(
             path: "../MachOKit",
             isRelative: true,
@@ -156,20 +126,7 @@ extension Package.Dependency {
 }
 
 extension Package.Dependency {
-    static let MachOObjCSection: Package.Dependency = {
-        if useCustomObjCSection {
-            return .MachOObjCSectionMain
-        } else {
-            return .MachOObjCSectionOrigin
-        }
-    }()
-
-    static let MachOObjCSectionOrigin = Package.Dependency.package(
-        url: "https://github.com/p-x9/MachOObjCSection.git",
-        from: "0.6.0",
-    )
-
-    static let MachOObjCSectionMain = Package.Dependency.package(
+    static let MachOObjCSection = Package.Dependency.package(
         local: .package(
             path: "../MachOObjCSection",
             isRelative: true,
