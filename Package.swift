@@ -148,16 +148,9 @@ extension Package.Dependency {
             isRelative: true,
         ),
         remote: .package(
-            url: "https://github.com/MxIris-Reverse-Engineering/MachOKit.git",
-            // A range rather than `exact:`, for the same reason as
-            // MachOObjCSection below. RuntimeViewer depends on this package and
-            // on MachOKit directly, so an exact requirement here deadlocks
-            // resolution the moment the app moves to a newer patch — which is
-            // exactly what `0.52.101` did. The lower bound is `0.52.101`
-            // because it fixes ObjC header info lookup in dyld subcaches; the
-            // upper bound stops at the next minor, where this line is free to
-            // break again.
-            "0.52.101" ..< "0.53.0",
+            // Keep the PrivateHeaderKit reader cohort on the same MachOKit revision.
+            url: "https://github.com/lynnswap/MachOKit.git",
+            revision: "f6a4f85280733a0e77d33f11274e7a12052c7ce1",
         ),
     )
 }
