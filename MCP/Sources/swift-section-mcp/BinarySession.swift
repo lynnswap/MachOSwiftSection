@@ -1,41 +1,71 @@
 import Foundation
 import MachOKit
+import MachOFoundation
+import SwiftDeclarationRendering
 
 /// Manages the loaded Mach-O file state across tool calls.
 ///
 /// Loading a Mach-O file (especially from dyld shared cache) is expensive,
 /// so this actor maintains the loaded state for reuse.
 actor BinarySession {
-    private(set) var machOFile: MachOFile?
-    private(set) var filePath: String?
+    private var loadedBinary: LoadedBinary?
+
+    var machOFile: MachOFile? { loadedBinary?.machO }
+    var filePath: String? { loadedBinary?.filePath }
+
+    private final class LoadedBinary {
+        let machO: MachOFile
+        let filePath: String?
+        let cachePath: String?
+
+        init(machO: MachOFile, filePath: String?, cachePath: String? = nil) {
+            self.machO = machO
+            self.filePath = filePath
+            self.cachePath = cachePath
+        }
+
+        lazy var fieldLayoutProvider: MachOFileStaticFieldLayoutProvider? = {
+            let resolution: StaticLayoutDependencyResolution = cachePath.map {
+                .dependencyClosure(searchPaths: [.dyldSharedCache(path: $0)])
+            } ?? .singleImage
+            return MachOFileStaticFieldLayoutProvider(machOFile: machO, resolution: resolution)
+        }()
+    }
 
     func load(path: String, architecture: String? = nil) throws -> String {
         var url = URL(fileURLWithPath: path)
         if let executableURL = Bundle(url: url)?.executableURL {
             url = executableURL
         }
+        let targetCPU: CPUSubType?
+        if let architecture {
+            switch architecture.lowercased() {
+            case "arm64": targetCPU = .arm64(.arm64_all)
+            case "arm64e": targetCPU = .arm64(.arm64e)
+            case "x86_64": targetCPU = .x86(.x86_64_all)
+            default: throw SessionError.invalidArchitecture
+            }
+        } else {
+            targetCPU = nil
+        }
         let file = try MachOKit.loadFromFile(url: url)
         switch file {
         case .machO(let machO):
-            self.machOFile = machO
-            self.filePath = path
-            return describeBinary(machO, path: path)
-        case .fat(let fatFile):
-            let targetCPU: CPUSubType? = architecture.flatMap { archString in
-                switch archString.lowercased() {
-                case "arm64": return .arm64(.arm64_all)
-                case "arm64e": return .arm64(.arm64e)
-                case "x86_64": return .x86(.x86_64_all)
-                default: return nil
-                }
-            }
-            guard let machO = try fatFile.machOFiles().first(where: {
-                $0.header.cpu.subtype == targetCPU ?? CPU.current?.subtype
-            }) ?? fatFile.machOFiles().first else {
+            if let targetCPU, machO.header.cpu.subtype != targetCPU {
                 throw SessionError.invalidArchitecture
             }
-            self.machOFile = machO
-            self.filePath = path
+            self.loadedBinary = LoadedBinary(machO: machO, filePath: path)
+            return describeBinary(machO, path: path)
+        case .fat(let fatFile):
+            let images = try fatFile.machOFiles()
+            let selected: MachOFile?
+            if let targetCPU {
+                selected = images.first { $0.header.cpu.subtype == targetCPU }
+            } else {
+                selected = images.first { $0.header.cpu.subtype == CPU.current?.subtype } ?? images.first
+            }
+            guard let machO = selected else { throw SessionError.invalidArchitecture }
+            self.loadedBinary = LoadedBinary(machO: machO, filePath: path)
             return describeBinary(machO, path: path)
         }
     }
@@ -45,6 +75,9 @@ actor BinarySession {
         imagePath: String? = nil,
         cachePath: String? = nil
     ) throws -> String {
+        guard imageName == nil || imagePath == nil else {
+            throw SessionError.conflictingImageIdentifiers
+        }
         let dyldCache: DyldCache
         if let cachePath {
             let url = URL(fileURLWithPath: cachePath)
@@ -57,15 +90,9 @@ actor BinarySession {
 
         let machO: MachOFile?
         if let imageName {
-            machO = dyldCache.machOFiles().first {
-                let path = $0.imagePath
-                let fileName = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
-                return fileName == imageName
-            }
+            machO = dyldCache.machOFile(by: .name(imageName))
         } else if let imagePath {
-            machO = dyldCache.machOFiles().first {
-                $0.imagePath == imagePath
-            }
+            machO = dyldCache.machOFile(by: .path(imagePath))
         } else {
             throw SessionError.missingImageIdentifier
         }
@@ -74,16 +101,29 @@ actor BinarySession {
             throw SessionError.imageNotFound
         }
 
-        self.machOFile = machO
-        self.filePath = imageName ?? imagePath
+        self.loadedBinary = LoadedBinary(
+            machO: machO,
+            filePath: imageName ?? imagePath,
+            cachePath: dyldCache.url.path
+        )
         return describeBinary(machO, path: self.filePath ?? "<dyld cache>")
     }
 
     func requireMachO() throws -> MachOFile {
-        guard let machOFile else {
-            throw SessionError.noBinaryLoaded
-        }
-        return machOFile
+        try requireBinary().machO
+    }
+
+    func requireBinary(includeFieldOffsets: Bool = false) throws -> (
+        machO: MachOFile,
+        cachePath: String?,
+        fieldLayoutProvider: MachOFileStaticFieldLayoutProvider?
+    ) {
+        guard let loadedBinary else { throw SessionError.noBinaryLoaded }
+        return (
+            loadedBinary.machO,
+            loadedBinary.cachePath,
+            includeFieldOffsets ? loadedBinary.fieldLayoutProvider : nil
+        )
     }
 
     private func describeBinary(_ machO: MachOFile, path: String) -> String {
@@ -100,6 +140,7 @@ enum SessionError: LocalizedError {
     case invalidArchitecture
     case dyldCacheNotAvailable
     case missingImageIdentifier
+    case conflictingImageIdentifiers
     case imageNotFound
 
     var errorDescription: String? {
@@ -112,6 +153,8 @@ enum SessionError: LocalizedError {
             "The system dyld shared cache is not available."
         case .missingImageIdentifier:
             "Either imageName or imagePath must be provided."
+        case .conflictingImageIdentifiers:
+            "Provide either imageName or imagePath, not both."
         case .imageNotFound:
             "The specified image was not found in the dyld shared cache."
         }

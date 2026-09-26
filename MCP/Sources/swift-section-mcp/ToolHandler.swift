@@ -3,6 +3,7 @@ import MCP
 import MachOKit
 import MachOSwiftSection
 import SwiftDump
+import SwiftDeclarationRendering
 import SwiftInterface
 import Semantic
 import Demangling
@@ -117,11 +118,11 @@ struct ToolHandler: Sendable {
     }
 
     private func handleDumpType(_ args: [String: Value]?) async throws -> String {
-        let machO = try await session.requireMachO()
+        let includeFieldOffsets = args?["includeFieldOffsets"]?.boolValue ?? false
+        let (machO, cachePath, provider) = try await session.requireBinary(includeFieldOffsets: includeFieldOffsets)
         guard let name = args?["name"]?.stringValue else {
             throw ToolError.missingArgument("name")
         }
-        let includeFieldOffsets = args?["includeFieldOffsets"]?.boolValue ?? false
 
         let types = try machO.swift.types
         let matched = types.filter { typeWrapper in
@@ -140,6 +141,12 @@ struct ToolHandler: Sendable {
 
         var configuration = DumperConfiguration.demangleOptions(.default)
         configuration.printFieldOffset = includeFieldOffsets
+        if includeFieldOffsets {
+            configuration.staticLayoutDependencyResolution = cachePath.map {
+                .dependencyClosure(searchPaths: [.dyldSharedCache(path: $0)])
+            } ?? .singleImage
+            configuration.staticFieldLayoutProvider = provider
+        }
 
         var results: [String] = []
         for typeWrapper in matched {
@@ -246,9 +253,9 @@ struct ToolHandler: Sendable {
         }
         let isType = args?["isType"]?.boolValue ?? false
 
-        let node = try demangleAsNode(symbol, isType: isType)
-        let defaultResult = node.print(using: .default)
-        let simplifiedResult = node.print(using: .simplified)
+        let node = try await demangleAsNode(symbol, isType: isType)
+        let defaultResult = await node.print(using: .default)
+        let simplifiedResult = await node.print(using: .simplified)
 
         var lines: [String] = []
         lines.append("Mangled: \(symbol)")

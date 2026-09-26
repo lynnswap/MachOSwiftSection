@@ -179,7 +179,7 @@ Printing and indexing are peers — neither depends on the other.
 
 **SwiftDiffing** - Binary ABI comparison across two or N versions (Mach-O-free: pure value computation over the indexed `SwiftDeclaration` model; depends only on `SwiftDeclaration` + `Demangling`)
 - `ABIDiffer` - Two-sided diff: keys every declaration on its remangled `Node` (`ABIKey`), recursive three-way set difference over types / protocols / four extension axes / globals. Extension containers are keyed **per (target, protocol, where fingerprint, retroactive)** — one conformance / conditional block per container (`extensionContainerSnapshots`; attribution frozen at index time onto `ExtensionDefinition.conformingProtocolName` / `genericSignature` / `resolvedAssociatedTypeWitnesses`), so a conformance add/remove is container-level, a where-clause or `@retroactive` change flips identity (removed+added), witness re-binding reports `.modified` (`assocwitness:` namespace), and the historical collision source is structurally gone. `MemberRecord` carries an `identityKey` (match) and a `payloadKey` (change detection: accessor set, field type, enum-case tag + `indirect` flag); a function's signature change is add+remove by design (different mangled symbol = different ABI entry point). `Compatibility` gives an additive/breaking verdict (treats every type as resilient — `@frozen` is not recoverable from the binary). Protocol containers also project their **symbol-stripped requirements** (the OS-framework norm) as `pwtslot:<offset>` records with the requirement flags (kind / isInstance / isAsync / hasDefaultImplementation) in the payload — a PWT-shape change is visible with zero symbols, a mid-table insertion honestly cascades the shifted slots, and stripped-ness being a symbolication state (not an ABI fact) is the documented caveat; the flag facts are Mach-O-free accessors on `StrippedSymbolicRequirement` so the module's `SwiftDeclaration`+`Demangling`-only dependency holds. Diagnostics are **surfaced, not silent**: `ABISnapshot.keyCollisions()` (first-wins key collisions) and `ABISnapshot.remangleFallbacks()` (keys carrying the self-identifying `unmangled:` remangle-fallback prefix, whose removed+added stories may be cross-toolchain identity flips) both ride on `ABIDiff.diagnostics` / `ABIEvolution.keyCollisionsByVersion`+`remangleFallbacksByVersion` + Warnings sections in both reporters
-- `ABISnapshot` / `ABISnapshotDocument` - Frozen `Codable` projection + the versioned persistence envelope (`formatVersion` — bump on any key-scheme change, decode fails typed on mismatch; currently 4: v2 folded `indirect` into enum-case keys, v3 split extension containers per conformance, v4 added `pwtslot:` protocol-requirement records and the `unmangled:` fallback prefix — plus `ABIProvenance`: label / binary path / generator version / date). `ABIJSON` is the one JSON dialect (ISO-8601, sorted keys) so baselines are byte-stable
+- `ABISnapshot` / `ABISnapshotDocument` - Frozen `Codable` projection + the versioned persistence envelope (`formatVersion` — bump on any key-scheme change, decode fails typed on mismatch; currently 5: v2 folded `indirect` into enum-case keys, v3 split extension containers per conformance, v4 added `pwtslot:` protocol-requirement records and the `unmangled:` fallback prefix, v5 added `hasDefaultImplementation` verdict metadata — plus `ABIProvenance`: label / binary path / generator version / date). `ABIJSON` is the one JSON dialect (ISO-8601, sorted keys) so baselines are byte-stable
 - `ABIEvolution` / `ABIEvolutionBuilder` / `ABIEvolutionReporter` - N ≥ 2 version lineage tracking: builds a key → per-version presence/payload matrix directly (not N−1 pairwise joins), producing per-declaration `ContainerLineage` / `MemberLineage` (presence bitmap + `LineageEvent`s at adjacent transitions). Member events exist only where the owning container is present on both adjacent versions (an added/removed container is the event itself, same rule as `ABIDiff`); for N == 2 the events match `ABIDiffer.diff` exactly (test-pinned). `transitionCompatibilities` extends the verdict per transition
 - CLI: `swift-section diff` (change-list / `--json` with provenance / annotated `--interface`; either side may be a snapshot JSON), `swift-section snapshot` (persist a baseline), `swift-section evolution` (N ordered inputs — binaries, dyld caches via `--dyld-shared-cache -n`, or snapshots mixed freely; `--labels`, `--summary-only`, `--json`, `--fail-on-breaking`; `--interface` renders the annotated union interface instead — binaries only, see the `SwiftEvolutionInterfaceBuilder` entry under SwiftInterface). Input plumbing shared via `ABISnapshotInputLoader`
 - See [Documentations/Internal/ABIDiffDesignAndLimitations.md](Documentations/Internal/ABIDiffDesignAndLimitations.md), [Documentations/Internal/ABIEvolutionDesign.md](Documentations/Internal/ABIEvolutionDesign.md), [Documentations/Internal/PerConformanceAttribution.md](Documentations/Internal/PerConformanceAttribution.md), and [Documentations/Internal/ProtocolRequirementProjection.md](Documentations/Internal/ProtocolRequirementProjection.md)
@@ -246,7 +246,13 @@ for descriptor in descriptors {
 }
 ```
 
-**Relative Pointers**: Swift uses position-independent relative offsets. The `RelativeDirectPointer<T>` and related types handle resolution.
+**Relative Pointers**: Swift uses position-independent relative offsets. The
+`RelativeDirectPointer<T>` and related types handle resolution. For indirect
+symbol-or-element pointers, do not put nullable behavior in a constrained
+overload: calls through `RelativeIndirectPointerProtocol` use the conformance
+witness. `SymbolOrElementPointer` therefore handles a zero slot in its single
+unconditional witness path; see
+[Documentations/Internal/NullIndirectSymbolicReferenceResolution.md](Documentations/Internal/NullIndirectSymbolicReferenceResolution.md).
 
 **Node-based Demangling**: Mangled symbols parse to `Node` trees, then print via `NodePrinter`:
 ```swift
@@ -302,17 +308,13 @@ suite passed" as "the executor was used": `LargeStackTaskExecutionTests` pins
 the executor behavior by thread identity, everything else is executor-agnostic
 by design.
 
-**On-the-fly-compiled fixture dylibs need a class.** A struct-only fixture
-module compiles to a dylib with NO `__DATA` segment, and the pinned MachOKit
-release mis-walks that layout's chained-fixup pages during `resolveBind` —
-reading past the file mapping's page-rounded end and killing the test process
-with SIGSEGV/SIGBUS from inside `SwiftDeclarationIndexer.prepare()` (observed:
-`DyldChainedFixups.pages(of:)` faulting at exactly mapping-end). Any class in
-the fixture source forces a `__DATA` segment and keeps the dylib on the
-well-trodden layout. The existing fixtures already comply, some by accident of
-scenario (`LegacyDyldInfoBindTests`, the evolution e2e's `Legacy` class) and
-some by deliberate ballast (`DiffMemberIndentationTests`' `Anchor` class) —
-keep any NEW compile-on-the-fly fixture module carrying at least one class.
+**Struct-only compiled fixtures are supported by the current fork.** Older
+upstream MachOKit releases could walk chained-fixup pages beyond a file mapping
+when a dylib lacked `__DATA`, so earlier fixtures added a ballast class. The
+current pinned fork uses bounded, cached chained-fixup parsing and does not
+require that layout workaround. `MCP/Fixtures/FieldLayoutFixture.swift`
+intentionally has no class; its field-layout test runs in both CI configurations.
+Keep fixture classes when their behavior is part of the scenario.
 
 **Sharing a fixture image across suites:** a suite that asserts on *whole-process
 state derived from an image* — the per-image caches, most of all — must declare
@@ -408,15 +410,16 @@ Rule out both before attributing red tests to a code change:
    `Tests/Projects/` (`git diff --stat <base> <head> -- Tests/Projects/`), just
    symlink the main checkout's `DerivedData` in rather than rebuilding.
 2. **Missing local sibling dependencies.** `Package.swift` declares
-   `../MachOKit`, `../MachOObjCSection`, `../swift-demangling`, and
+   `../MachOKit`, `../MachOObjCSection`, `../MachOKitExtensions`, `../swift-demangling`, and
    `../swift-semantic-string` as *conditional local path* dependencies: they are
    used only when the sibling directory exists AND `USING_LOCAL_DEPENDENCIES=1`
-   is set in the build's environment, else resolution silently falls back
+   is set in the build's environment. Paths under `/checkouts/`, `/SourcePackages/`,
+   or `/.build/` always use remote dependencies. Otherwise resolution falls back
    to the remote release. A worktree checked out elsewhere (e.g. a scratchpad)
    has no siblings and builds against older remote versions — output drifts
    wholesale (e.g. `T?` printing as `Swift.Optional<T>`), invalidating any
    cross-commit A/B comparison. For historical-baseline experiments, place or
-   symlink all four siblings next to the worktree first. Beware the
+   symlink all five siblings next to the worktree first. Beware the
    environment-variable half being masked by caching: SwiftPM caches the
    manifest *evaluation* per scratch path, so a long-lived scratch keeps using
    local siblings from a session where the variable was set, while a FRESH

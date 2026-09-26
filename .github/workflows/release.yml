@@ -15,7 +15,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Locate changelog
         id: changelog
@@ -29,9 +29,9 @@ jobs:
           echo "path=$notes_file" >> "$GITHUB_OUTPUT"
 
       - name: Setup Xcode
-        uses: maxim-lobanov/setup-xcode@v1
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
         with:
-          xcode-version: "26.4"
+          xcode-version: "26.6"
 
       - name: Swift version
         run: swift --version

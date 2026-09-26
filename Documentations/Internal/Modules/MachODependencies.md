@@ -40,7 +40,7 @@ bare name 同时是所有依赖集合的**去重键**：同一个库会被不同
 - **`FileDependencyLocator`**：两步查找，顺序固定：
   1. **install path 精确匹配**——系统框架的 load name 就是 cache 镜像的 `imagePath`，命中即是编译器自己的答案。显式文件同时以「传入的磁盘路径」和「文件的 install name（`LC_ID_DYLIB`，通常 `@rpath/…`）」两种拼写登记，因为 `MachOFile.imagePath` 是 install name 而非磁盘路径。
   2. **bare name 排序兜底**——`@rpath/…` 或 cache 不认识的路径拼写落到这里。cache 里 leaf name 不唯一：macOS cache 在 `/System/iOSSupport` 下带着 Mac Catalyst 版 SwiftUI，iOS cache 有同名 `.axbundle`。候选按 MachOKitExtensions 的 `DyldCacheImageSearchMode.matchRank` 排序（canonical framework > 普通 dylib > bundle，support root 降级），取最优。**旧的 SwiftLayout 定位器是「枚举顺序首写者胜」**，在 macOS cache 上可能选中 Catalyst 构建——这是合并时消除的潜在错配（`FileDependencyLocatorTests.bareNameFallbackPrefersTheNativeCanonicalFramework` 锁定）。`matchRank` 对多点 leaf（`libc++.1.dylib`）返回 `nil`，此时记为最差 rank 但仍可解析。
-  
+
   cache 索引**首次查询时一次性建成**（一遍 `machOFiles()`，同时建 install path 表与 bare name 最优表），之后 O(1)。逐次 `machOFile(by:)` 是 `O(依赖数 × cache 大小)` 的全扫描，阶段 3 实测 551 镜像闭包要 21 秒。`NSLock` 保护惰性索引，定位器可跨任务共享。
 
   fat 显式文件取与 root 同架构的 slice（`preferredCPU`：先比 `cpu.type` + 掩掉 capability 位后的 `cpu.subtype`，能分开 arm64 / arm64e；再只比 type；最后 `.first`——旧两处实现都无条件取 `.first`）。注意 MachOKit 的 `CPU ==` 比的是原始值，versioned-ABI 的 arm64e 切片会和普通 arm64e 判不等，所以不能直接比 `header.cpu`。

@@ -107,7 +107,7 @@ var dependencies: [Package.Dependency] = [
     // TypeIndexing (all its sources are `#if os(macOS)`; both products carry
     // a macOS-only platform condition on the target dependency)
     .package(url: "https://github.com/Mx-Iris/SourceKitD", from: "0.1.0"),
-    .package(url: "https://github.com/MxIris-DeveloperTool/swift-apinotes", from: "0.1.0"),
+    .package(url: "https://github.com/lynnswap/swift-apinotes.git", revision: "6ad58901a18a9bc6d5a80ab8afedb372d13acd4f"),
 
     // CLI
     .package(url: "https://github.com/onevcat/Rainbow", from: "4.0.0"),
@@ -123,8 +123,8 @@ extension Package.Dependency {
             isRelative: true,
         ),
         remote: .package(
-            url: "https://github.com/MxIris-Reverse-Engineering/MachOKit.git",
-            "0.52.101" ..< "0.53.0",
+            url: "https://github.com/lynnswap/MachOKit.git",
+            revision: "8d451ca2e9d108f0a2024758b33b25e8faa2adbb",
         ),
     )
 
@@ -145,8 +145,8 @@ extension Package.Dependency {
             isRelative: true,
         ),
         remote: .package(
-            url: "https://github.com/MxIris-Reverse-Engineering/MachOObjCSection.git",
-            "0.8.105" ..< "0.9.0",
+            url: "https://github.com/lynnswap/MachOObjCSection.git",
+            revision: "5576f1e1f53ed88faf4e71c781246f7ec1cd1b24",
         ),
     )
 }

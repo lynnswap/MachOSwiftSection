@@ -25,9 +25,9 @@ jobs:
       MACHO_SWIFT_SECTION_SILENT_TEST: 1
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Setup Xcode
-        uses: maxim-lobanov/setup-xcode@v1
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
         with:
           xcode-version: ${{ matrix.xcode-version }}
       - name: Swift version
@@ -37,7 +37,7 @@ jobs:
         run: swift package update
 
       - name: Cache SymbolTests DerivedData
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: Tests/Projects/SymbolTests/DerivedData
           key: symboltests-${{ matrix.xcode-version }}-${{ hashFiles('Tests/Projects/SymbolTests/**/*.swift', 'Tests/Projects/SymbolTests/**/*.pbxproj', '.github/workflows/macOS.yml') }}
@@ -93,14 +93,14 @@ jobs:
 
       - name: Upload xcodebuild logs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: symboltests-derived-data-logs-${{ matrix.configuration }}
           path: Tests/Projects/SymbolTests/DerivedData/Logs
           if-no-files-found: ignore
 
       - name: Cache SwiftPM build directory
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .build-test-${{ matrix.configuration }}
           # This step runs after `swift package update`, so the key hashes the
@@ -117,4 +117,12 @@ jobs:
             -c ${{ matrix.configuration }} \
             --enable-experimental-prebuilts \
             --build-path .build-test-${{ matrix.configuration }} \
-            --filter '\.(SymbolTestsCoreDumpSnapshotTests|SymbolTestsCoreInterfaceSnapshotTests|SymbolTestsCoreCoverageInvariantTests|STCoreE2ETests|STCoreTests|GenericSpecializationTests|MultiPayloadEnumTests|MetadataReaderDemanglingTests|DependencyLoadNameTests|DependencyClosureTests|FileDependencyLocatorTests|SwiftInterfaceBuilderDependenciesTests|ManglingPrefixTests|MethodDescriptorTests|MethodOverrideDescriptorTests|MethodDefaultOverrideDescriptorTests|ProtocolRequirementTests|ResilientWitnessTests|LargeStackTaskExecutionTests|BoundedConcurrentMapTests|SwiftEvolutionInterfaceBuilderTests|EvolutionCommandValidationTests|DiffCommandValidationTests)(/|$)'
+            --filter '\.(Arm64eSignedVWTPointerTests|DiffOutputTests|SymbolTestsCoreDumpSnapshotTests|SymbolTestsCoreInterfaceSnapshotTests|SymbolTestsCoreCoverageInvariantTests|STCoreE2ETests|STCoreTests|GenericSpecializationTests|MultiPayloadEnumTests|MetadataReaderDemanglingTests|DependencyLoadNameTests|DependencyClosureTests|FileDependencyLocatorTests|SwiftInterfaceBuilderDependenciesTests|ManglingPrefixTests|MethodDescriptorTests|MethodOverrideDescriptorTests|MethodDefaultOverrideDescriptorTests|ProtocolRequirementTests|ResilientWitnessTests|LargeStackTaskExecutionTests|BoundedConcurrentMapTests|SwiftEvolutionInterfaceBuilderTests|EvolutionCommandValidationTests|DiffCommandValidationTests)(/|$)'
+
+      - name: Build MCP field-layout fixture
+        run: swiftc -emit-library -module-name MCPFixture MCP/Fixtures/FieldLayoutFixture.swift -o "$RUNNER_TEMP/libMCPFixture.dylib"
+
+      - name: Test MCP package (${{ matrix.configuration }})
+        env:
+          MCP_FIELD_LAYOUT_FIXTURE: ${{ runner.temp }}/libMCPFixture.dylib
+        run: swift test --package-path MCP -c ${{ matrix.configuration }} --scratch-path .build-test-${{ matrix.configuration }}

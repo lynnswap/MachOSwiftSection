@@ -51,4 +51,3 @@
 ## code-review 后续修正（PR #120，另一会话审查、本会话落地）
 
 审查报 15 条，四问过后本 PR 动手 5 处：① 代码注释里的提案引用从 `draft-macho-dependencies-module` 改成 slug `macho-dependencies-module`（规则是代码注释只用 slug，`draft-` 是创建期文件名前缀而非 slug；审查原建议改编号，核实规则后否决）；② 四个新套件加进 CI filter；③ `SwiftInterfaceBuilderDependenciesTests` 补 `ExclusiveImageAccess(.SymbolTestsHelper)`（它经 `InProcessDependencyLocator` 对 helper 调 `MachOImage(name:)`）；④ **本 PR 新引入的真问题**：文件定位器三键登记后同一镜像可能以两个 bare name 各进 `images` 一次，加按 `identifier` 去重 + 复现测试（修前 `images.count == 2`）；⑤ 切片选择比 `cpu.type` + 掩码后 `cpu.subtype`（审查会话指出 `CPU ==` 不掩 capability 位）。另开不进本 PR：CLI `--resolve-c-module-names` 的「解析为空」守卫判据本就写错（应判平台不匹配，3e8f78ae 选错判据，非本次回归，且需非 macOS fixture 才能写红测试）。登记不修：SwiftLayout 丢弃 `searchPathLoadFailures`（与 next 一致，宿主可自行 resolve 再喂 `dependencyClosure(_:)`）、一次性 cache 索引开销（与 A6 同性质）。
-

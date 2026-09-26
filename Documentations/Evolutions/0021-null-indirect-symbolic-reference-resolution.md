@@ -1,0 +1,147 @@
+# 0021 - 空间接符号引用的单一 witness 解析契约
+
+## PrivateHeaderKit reader cohort on upstream 0.19.0
+
+The current remote dependency graph pins `lynnswap/MachOKit` at
+`8d451ca2e9d108f0a2024758b33b25e8faa2adbb`, `lynnswap/MachOObjCSection` at
+`5576f1e1f53ed88faf4e71c781246f7ec1cd1b24`, and `lynnswap/swift-apinotes` at
+`6ad58901a18a9bc6d5a80ab8afedb372d13acd4f`. These supersede the earlier cohort
+revisions recorded below. The reader pins retain bounded metadata diagnostics
+and self-bind resolution; the APINotes pin aligns Apple platform minima with
+MetaCodable so SwiftPM can validate Simulator builds. Downstream consumers
+that declare the readers directly must use the same repository identities and
+revisions.
+
+On this cohort, PrivateHeaderKit passed 668 default tests and file-backed
+AdSupport, BrowserKit, SensorKit, and MetricKit integration cases on iOS 27.0
+and 27.1, with no Objective-C metadata diagnostics. Its iOS and watchOS
+Simulator helper products built successfully. The focused null-reference, PAC,
+and CLI tests passed. The broader local Swift reader run reported seven
+fixed-address fixture mismatches; the current compiler build differs from the
+upstream CI build, and those baselines were not rewritten.
+
+Tracking: [PrivateHeaderKit #102](https://github.com/lynnswap/PrivateHeaderKit/issues/102).
+
+
+- **状态**: Implemented
+- **作者**: Kazuki Nakashima
+- **创建日期**: 2026-08-18
+- **最后更新**: 2026-08-18
+- **所属愿景**: 无
+- **关联提案**: 无
+- **实现分支 / PR**: `codex/fix-null-indirect-symbolic-reference`
+- **配套文档**: [NullIndirectSymbolicReferenceResolution.md](../Internal/NullIndirectSymbolicReferenceResolution.md)
+
+## 摘要
+
+`RelativeIndirectSymbolOrElementPointer<ContextDescriptorWrapper?>` 已用
+Optional 表达「间接槽可以为空」，但 `SymbolOrElementPointer` 把空值行为写在
+`where Element: OptionalProtocol` 的重载里。具体类型直接调用能选中该重载；
+`RelativeIndirectPointerProtocol` 经 associated type 调用时却使用无约束的
+`RelativeIndirectType` witness，遂把地址 0 送入 reader 并在进程内路径解引用
+空指针。本提案把空值语义移入唯一的无约束 witness：Optional element 得到
+`.element(.none)`，非 Optional element 抛 `ReadingError.invalidAddress(0)`；删除
+条件重载，使直接与泛型分派共享同一 owner。
+
+## 动机与破坏的 invariant
+
+间接 context symbolic reference（mangling kind `0x02`）先按相对位移找到一个
+指针槽，再解析槽内地址。槽内 0 是「没有 descriptor」，不是可读虚拟地址。
+
+现有实现破坏了两条本应由 pointer abstraction 保证的 invariant：
+
+1. 任何地址转换、wrapper read 之前必须处理 0。
+2. 相同具体类型的直接调用与 protocol-generic 调用必须具有相同语义。
+
+`MetadataReader` 外层已有 `catch`，但 SIGSEGV 不是 Swift error，无法进入该边界。
+因此在 `MetadataReader` 或具体 framework 名上加 guard 都是把 ABI 解释责任移到
+调用者，不能修复 invariant。
+
+## 决策
+
+### 1. Owner 留在 `SymbolOrElementPointer` 的真实 conformance witness
+
+三个既有无约束 `resolve` 方法（context-free / MachO / ReadingContext）先检查
+`.address(0)`，再走原有非零逻辑。公开泛型类型、symbol 分支和非零分支不变；
+三个 public constrained overload declaration 被删除，但相同 call signature 继续
+由无约束 witness 提供，源码调用保持可编译。
+
+### 2. 复用现有 `OptionalProtocol`，不扩 public API
+
+私有 helper 对 `Element.Type` 做受检 existential cast，读取其 `.none`，再做受检
+cast 回 `Element`。成功即返回 `.element(.none)`；Element 不能表达空值或 cast
+失败时抛现有 `ReadingError.invalidAddress(0)`。不用 force cast，也不新增第二套
+nullability protocol。
+
+### 3. 删除条件重载
+
+保留 `where Element: OptionalProtocol` extension 即使当前实现相同，也会让 source
+里继续存在两个语义 owner，并让未来改动再次分叉。故整段删除。
+
+## 被否方案
+
+- **在 `MetadataReader` 的 kind-0x02 分支判 0**：越过 pointer abstraction，其他
+  caller 仍可崩；且需要先暴露间接槽实现细节。
+- **按 `FoundationModels` 特判**：把一个通用 ABI 状态误写成 framework 例外，下一
+  个携带空槽的 binary 会原样复现。
+- **只修 `RelativeIndirectPointerProtocol where Pointee: OptionalProtocol`**：本案
+  `Pointee` 是 `SymbolOrElement<ContextDescriptorWrapper?>`，并非 Optional，约束不
+  成立。
+- **新增 public nullable-pointer 类型或协议**：能表达契约，但为修复既有 witness
+  引入不必要的 API 与迁移成本。
+
+## 兼容性
+
+- 三个 public constrained overload declaration 被删除；相同 call signature 仍由
+  unconditional witness 提供。本库从源码分发，现有调用保持源码兼容；不承诺二进制
+  ABI 兼容。
+- Optional 空槽从崩溃变为既有模型中的 `.element(nil)`。
+- 非 Optional 空槽从非法内存访问变为 `ReadingError.invalidAddress(0)`。
+- 非零地址、bind/rebase symbol 与 context-free symbol 行为不变。
+
+## 验证
+
+- 合成非零 relative pointer → `UInt64(0)` 槽，经 generic
+  `RelativeIndirectPointerProtocol` 路径断言 `.element(nil)`，并记录 reader 未收到
+  address-zero 读取/转换。
+- 同形状 non-optional pointer 断言 `ReadingError.invalidAddress(0)`。
+- `SymbolOrElementPointer.address(0)` 分别经 generic `RelativeIndirectType` 的
+  context-free / MachO witness，固定 Optional 与 non-optional 两侧的同一契约。
+- 合成 kind `0x02` 的 `MangledName`，用 `MachOImage` 进入 `MetadataReader`，断言
+  `DemanglingError.requiredNonOptional`，不再 exit 139。
+- 运行受影响测试、`swift test --skip IntegrationTests` 与 `git diff --check`；不运行
+  `Tests/IntegrationTests`。
+
+## 发布
+
+本批不 bump 版本、不写 changelog。后续 release 按正常版本流程收录。
+
+下游 PrivateHeaderKit 同时直接依赖 MachOSwiftSection 与尚未发布的
+MachOObjCSection protocol-metadata safety fix。为避免同一 SwiftPM identity 同时由
+upstream URL 与 fork URL 引入，本 fork 的 remote fallback 也固定到
+`lynnswap/MachOObjCSection@7d159a0216565edae417bf40716dd447bf295e7b`。
+本地 sibling checkout 仍优先；这只是未发布修复期间的 remote cohort 对齐，后续两项
+修复进入正式 release 后一并恢复官方 URL / version requirement。
+
+该 revision 不进入 tag / general release，也不作为 RuntimeViewer 的升级点。
+RuntimeViewer 仍直接固定官方 MachOObjCSection；若要采用这一临时 revision，必须在同一
+变更中把其 direct dependency 也切到相同 fork SHA。当前范围只服务于显式固定该 SHA 的
+PrivateHeaderKit，因此不改 RuntimeViewer。
+
+2026-08-18 的后续 Issue #60 把同一 safety cohort 前移到 `ecc84fb`，以支持 dyld
+cache-wide canonical protocol 的 direct-name recovery。source identity、
+`USING_LOCAL_DEPENDENCIES=1` 时的 local sibling 优先级、PrivateHeaderKit-only 范围与撤回条件
+均不变。
+
+2026-08-19 的后续 Issue #62 再把该 cohort 前移到 `e8fdf4e`。新 revision 按 Objective-C
+runtime ABI 遍历全部 loaded relative protocol lists，不再要求 class owner image entry。
+这仍是相同的 PrivateHeaderKit-only exact-pin cohort；本提案原有 null-reference 实现与
+历史验证记录不变。
+
+2026-08-19 的 Issue #65 继续把 cohort 前移到 `9880258`。该 revision 把相同的 loaded-entry
+契约扩展到 relative method/property lists，并新增独立的 member-list Diagnostics SPI。
+source identity、local sibling 条件、PrivateHeaderKit-only 范围与撤回条件仍不变。
+
+同日 runtime smoke 后把 cohort 继续前移到 `932bff2`。该 follow-up 接受 count 为 0、
+entry size 未使用的合法空 member list，同时保持非空 list 的 size/alignment/range 验证。
+`9880258` 的记录继续代表首次 member-list 集成，不回写历史验证。

@@ -1321,6 +1321,58 @@
 
 ---
 
+## 57. 空间接符号引用的单一 witness 解析契约
+
+### Current cohort on upstream 0.19.0
+
+MachOKit `8d451ca2e9d108f0a2024758b33b25e8faa2adbb`, MachOObjCSection
+`5576f1e1f53ed88faf4e71c781246f7ec1cd1b24`, and APINotes
+`6ad58901a18a9bc6d5a80ab8afedb372d13acd4f` supersede the revisions below.
+The rationale and current validation are recorded in
+[proposal 0021](../Evolutions/0021-null-indirect-symbolic-reference-resolution.md#privateheaderkit-reader-cohort-on-upstream-0190).
+
+
+- **时间段**：2026-08-18。
+- **动机**：iOS 27 Simulator 的 `FoundationModels.framework` 在 Swift interface
+  渲染中解析 indirect context symbolic reference 时 SIGSEGV。间接槽值为 0，
+  但 Optional 语义写在 constrained overload；generic
+  `RelativeIndirectPointerProtocol` 路径使用无约束 witness，遂把 0 转成地址并在
+  `MachOImage.readWrapperElement` 解引用。`MetadataReader` 的 catch 无法捕捉
+  memory fault。
+- **关键决策**：invariant owner 留在
+  `MachOPointers.SymbolOrElementPointer` 的真实 `RelativeIndirectType`
+  witness。三个无约束 `resolve` 在任何转换/读取前处理 0：现有
+  `OptionalProtocol` element 生成 `.element(.none)`，non-optional 抛
+  `ReadingError.invalidAddress(0)`；删除条件重载，结构上消除 direct / generic
+  分派再次分叉的可能。不在 `MetadataReader` 或 framework 名上加 guard，不扩
+  public API。
+- **落地模块**：`MachOPointers`（单一 null witness）、
+  `SwiftInspectionTests`（三个 witness overload 的 Optional / non-optional 契约 +
+  generic pointer probe + kind-0x02 `MangledName`/MachOImage E2E）。下游 fork cohort
+  期间，remote `MachOObjCSection` fallback 与 PrivateHeaderKit 共用
+  `lynnswap@7d159a0`，并在 Issue #60 中前移到 `lynnswap@ecc84fb`，避免 SwiftPM 的
+  duplicate identity；Issue #62 又把同一 cohort 前移到 `lynnswap@e8fdf4e`，以采用
+  loaded relative protocol list-of-lists 的 ABI-correct plural reader；Issue #65 再前移到
+  `lynnswap@9880258`，让 relative method/property lists 共用同一 checked outer owner。
+  watchOS 27 runtime smoke 后续再前移到 `lynnswap@932bff2`，接受 count 为 0 的合法空
+  member list，而非空 list 的结构验证不变。
+  `USING_LOCAL_DEPENDENCIES=1` 时的本地 sibling 优先级不变。
+  三个 constrained public declaration 被删除，但相同 call signature 由
+  unconditional witness 提供，源码兼容、不承诺二进制 ABI。
+- **验证**：新增 5 tests 全绿；fresh worktree 重建并 ad-hoc 签名
+  `SymbolTestsCore` fixture 后，`swift test --skip IntegrationTests --quiet` 为
+  1359 tests / 253 suites 全绿；`7d159a0` cohort 对齐后再次保持 1359 / 253 全绿。
+  Issue #60 的 `ecc84fb` follow-up 重新 resolve 单一 identity，并在 ad-hoc fixture 重建后
+  再次通过 1359 / 253。Issue #62 的 `e8fdf4e` follow-up 验证记录见同任务报告；未运行
+  IntegrationTests、未改 baseline。Issue #65 的 `9880258` 与 `932bff2` follow-up 结果也追加到
+  同任务报告。
+- **文档**：[NullIndirectSymbolicReferenceResolution.md](NullIndirectSymbolicReferenceResolution.md)、
+  [evolution 0021](../Evolutions/0021-null-indirect-symbolic-reference-resolution.md)、
+  [TaskReports/2026-08-18-null-indirect-symbolic-reference-resolution.md](TaskReports/2026-08-18-null-indirect-symbolic-reference-resolution.md)。
+- **对应版本**：`0.15.2` 之后、下一次 bump 之前（本批不 bump）。
+
+---
+
 ## 维护约定
 
 1. **每个非平凡批次结束时必须在本文追加/更新一节**（新工作弧新增一节；延续既有弧则在该节

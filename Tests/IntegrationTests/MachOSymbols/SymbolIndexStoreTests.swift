@@ -17,11 +17,11 @@ enum SymbolIndexStoreTests {
             ContinuousClock().measure {
                 SymbolIndexStore.shared.prepare(in: machOImage)
             }.print()
-            
+
             ProcessMemory.report()
         }
     }
-    
+
     @Suite
     final class SwiftUICoreTests: MachOImageTests {
         override class var imageName: MachOImageName {
