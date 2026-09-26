@@ -118,11 +118,11 @@ struct ToolHandler: Sendable {
     }
 
     private func handleDumpType(_ args: [String: Value]?) async throws -> String {
-        let (machO, cachePath) = try await session.requireBinary()
+        let includeFieldOffsets = args?["includeFieldOffsets"]?.boolValue ?? false
+        let (machO, cachePath, provider) = try await session.requireBinary(includeFieldOffsets: includeFieldOffsets)
         guard let name = args?["name"]?.stringValue else {
             throw ToolError.missingArgument("name")
         }
-        let includeFieldOffsets = args?["includeFieldOffsets"]?.boolValue ?? false
 
         let types = try machO.swift.types
         let matched = types.filter { typeWrapper in
@@ -147,10 +147,7 @@ struct ToolHandler: Sendable {
                     searchPaths: [.dyldSharedCache(path: cachePath)]
                 )
             }
-            configuration.staticFieldLayoutProvider = MachOFileStaticFieldLayoutProvider(
-                machOFile: machO,
-                resolution: configuration.staticLayoutDependencyResolution
-            )
+            configuration.staticFieldLayoutProvider = provider
         }
 
         var results: [String] = []

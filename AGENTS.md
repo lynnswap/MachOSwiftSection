@@ -308,17 +308,13 @@ suite passed" as "the executor was used": `LargeStackTaskExecutionTests` pins
 the executor behavior by thread identity, everything else is executor-agnostic
 by design.
 
-**On-the-fly-compiled fixture dylibs need a class.** A struct-only fixture
-module compiles to a dylib with NO `__DATA` segment, and the pinned MachOKit
-release mis-walks that layout's chained-fixup pages during `resolveBind` —
-reading past the file mapping's page-rounded end and killing the test process
-with SIGSEGV/SIGBUS from inside `SwiftDeclarationIndexer.prepare()` (observed:
-`DyldChainedFixups.pages(of:)` faulting at exactly mapping-end). Any class in
-the fixture source forces a `__DATA` segment and keeps the dylib on the
-well-trodden layout. The existing fixtures already comply, some by accident of
-scenario (`LegacyDyldInfoBindTests`, the evolution e2e's `Legacy` class) and
-some by deliberate ballast (`DiffMemberIndentationTests`' `Anchor` class) —
-keep any NEW compile-on-the-fly fixture module carrying at least one class.
+**Struct-only compiled fixtures are supported by the current fork.** Older
+upstream MachOKit releases could walk chained-fixup pages beyond a file mapping
+when a dylib lacked `__DATA`, so earlier fixtures added a ballast class. The
+current pinned fork uses bounded, cached chained-fixup parsing and does not
+require that layout workaround. `MCP/Fixtures/FieldLayoutFixture.swift`
+intentionally has no class; its field-layout test runs in both CI configurations.
+Keep fixture classes when their behavior is part of the scenario.
 
 **Sharing a fixture image across suites:** a suite that asserts on *whole-process
 state derived from an image* — the per-image caches, most of all — must declare

@@ -1,15 +1,36 @@
 import Foundation
 import MachOKit
 import MachOFoundation
+import SwiftDeclarationRendering
 
 /// Manages the loaded Mach-O file state across tool calls.
 ///
 /// Loading a Mach-O file (especially from dyld shared cache) is expensive,
 /// so this actor maintains the loaded state for reuse.
 actor BinarySession {
-    private(set) var machOFile: MachOFile?
-    private(set) var filePath: String?
-    private var cachePath: String?
+    private var loadedBinary: LoadedBinary?
+
+    var machOFile: MachOFile? { loadedBinary?.machO }
+    var filePath: String? { loadedBinary?.filePath }
+
+    private final class LoadedBinary {
+        let machO: MachOFile
+        let filePath: String?
+        let cachePath: String?
+
+        init(machO: MachOFile, filePath: String?, cachePath: String? = nil) {
+            self.machO = machO
+            self.filePath = filePath
+            self.cachePath = cachePath
+        }
+
+        lazy var fieldLayoutProvider: MachOFileStaticFieldLayoutProvider? = {
+            let resolution: StaticLayoutDependencyResolution = cachePath.map {
+                .dependencyClosure(searchPaths: [.dyldSharedCache(path: $0)])
+            } ?? .default
+            return MachOFileStaticFieldLayoutProvider(machOFile: machO, resolution: resolution)
+        }()
+    }
 
     func load(path: String, architecture: String? = nil) throws -> String {
         var url = URL(fileURLWithPath: path)
@@ -33,9 +54,7 @@ actor BinarySession {
             if let targetCPU, machO.header.cpu.subtype != targetCPU {
                 throw SessionError.invalidArchitecture
             }
-            self.machOFile = machO
-            self.filePath = path
-            self.cachePath = nil
+            self.loadedBinary = LoadedBinary(machO: machO, filePath: path)
             return describeBinary(machO, path: path)
         case .fat(let fatFile):
             let images = try fatFile.machOFiles()
@@ -46,9 +65,7 @@ actor BinarySession {
                 selected = images.first { $0.header.cpu.subtype == CPU.current?.subtype } ?? images.first
             }
             guard let machO = selected else { throw SessionError.invalidArchitecture }
-            self.machOFile = machO
-            self.filePath = path
-            self.cachePath = nil
+            self.loadedBinary = LoadedBinary(machO: machO, filePath: path)
             return describeBinary(machO, path: path)
         }
     }
@@ -84,9 +101,11 @@ actor BinarySession {
             throw SessionError.imageNotFound
         }
 
-        self.machOFile = machO
-        self.filePath = imageName ?? imagePath
-        self.cachePath = dyldCache.url.path
+        self.loadedBinary = LoadedBinary(
+            machO: machO,
+            filePath: imageName ?? imagePath,
+            cachePath: dyldCache.url.path
+        )
         return describeBinary(machO, path: self.filePath ?? "<dyld cache>")
     }
 
@@ -94,9 +113,17 @@ actor BinarySession {
         try requireBinary().machO
     }
 
-    func requireBinary() throws -> (machO: MachOFile, cachePath: String?) {
-        guard let machOFile else { throw SessionError.noBinaryLoaded }
-        return (machOFile, cachePath)
+    func requireBinary(includeFieldOffsets: Bool = false) throws -> (
+        machO: MachOFile,
+        cachePath: String?,
+        fieldLayoutProvider: MachOFileStaticFieldLayoutProvider?
+    ) {
+        guard let loadedBinary else { throw SessionError.noBinaryLoaded }
+        return (
+            loadedBinary.machO,
+            loadedBinary.cachePath,
+            includeFieldOffsets ? loadedBinary.fieldLayoutProvider : nil
+        )
     }
 
     private func describeBinary(_ machO: MachOFile, path: String) -> String {
