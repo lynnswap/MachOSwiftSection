@@ -163,7 +163,7 @@ extension SwiftDeclarationPrinter {
             let rootNode = thunkSymbol.demangledNode
             guard let functionNode = rootNode.children.first(where: { $0.kind != .distributedThunk }) else { continue }
             guard let contextNode = functionNode.children.first else { continue }
-            let thunkTypeName = Node.create(kind: .type, child: contextNode).print(using: .interfaceTypeBuilderOnly)
+            let thunkTypeName = Node.create(kind: .type, child: contextNode.materialize()).print(using: .interfaceTypeBuilderOnly)
             if thunkTypeName == currentTypeName {
                 return true
             }
@@ -249,7 +249,10 @@ extension SwiftDeclarationPrinter {
             Space()
             Standard("=")
             Space()
-            try await resolver.resolve(for: MetadataReader.demangleType(for: record.mangledTypeName, in: machO).resolveOpaqueType(in: machO))
+            try await resolver.resolve(
+                for: MetadataReader.demangleType(for: record.mangledTypeName, in: machO)
+                    .resolveOpaqueType(in: machO, reportingDegradationTo: opaqueTypeDegradationReporter(subject: record.name))
+            )
             if offset.isEnd {
                 BreakLine()
             }
@@ -301,8 +304,11 @@ extension SwiftDeclarationPrinter {
     /// whole type's rendering throw — it does not degrade into a silently
     /// empty line. The diff renderer keeps its own per-member catch via
     /// `printField` / `printEnumCase`.
+    /// `typeContext` is the caller's materialized wrapper for this print
+    /// operation (proposal 0002) — `printTypeDefinition` materializes once
+    /// and threads it into both the header renderer and this function.
     @SemanticStringBuilder
-    func renderModelFields(_ typeDefinition: TypeDefinition, level: Int) async throws -> SemanticString {
+    func renderModelFields(_ typeDefinition: TypeDefinition, typeContext: TypeContextWrapper, level: Int) async throws -> SemanticString {
         let isEnum = typeDefinition.typeName.kind == .enum
 
         // Shared metadata-comment renderer (single source of truth with
@@ -315,7 +321,9 @@ extension SwiftDeclarationPrinter {
             printFieldOffset: configuration.printFieldOffset,
             printTypeLayout: configuration.printTypeLayout,
             printEnumLayout: configuration.printEnumLayout,
+            printVTableOffset: configuration.printVTableOffset,
             printExpandedFieldOffsets: configuration.printExpandedFieldOffsets,
+            vtableOffsetTransformer: configuration.vtableOffsetTransformer,
             fieldOffsetTransformer: configuration.fieldOffsetTransformer,
             expandedFieldOffsetTransformer: configuration.expandedFieldOffsetTransformer,
             typeLayoutTransformer: configuration.typeLayoutTransformer,
@@ -324,8 +332,8 @@ extension SwiftDeclarationPrinter {
             staticFieldLayoutProvider: staticFieldLayoutProvider(),
             staticLayoutDependencyResolution: configuration.staticLayoutDependencyResolution
         )
-        let fieldLayoutRenderer = FieldLayoutRenderer(type: typeDefinition.type, metadata: typeDefinition.metadata, machO: machO, configuration: renderConfiguration)
-        let fieldRecords = try typeDefinition.type.contextDescriptorWrapper.typeContextDescriptor?.fieldDescriptor(in: machO).records(in: machO) ?? []
+        let fieldLayoutRenderer = FieldLayoutRenderer(type: typeContext, metadata: typeDefinition.metadata, machO: machO, configuration: renderConfiguration)
+        let fieldRecords = try typeDefinition.typeContextDescriptorWrapper.typeContextDescriptor.fieldDescriptor(in: machO).records(in: machO)
         let fieldOffsets = isEnum ? nil : fieldLayoutRenderer.fieldOffsets
 
         // Specialized definitions substitute each field's generic-parameter
@@ -344,9 +352,18 @@ extension SwiftDeclarationPrinter {
             await fieldLayoutRenderer.enumPrefixComments(enumLayout: enumLayout)
         }
 
-        for (offset, field) in typeDefinition.fields.offsetEnumerated() {
+        // Exported-only filter (evolution proposal
+        // `exported-only-interface`): the rendered fields are selected
+        // up front, so a dropped field keeps every survivor's ORIGINAL index
+        // (field records and layout comments are positional) and the trailing
+        // break still follows the last field actually rendered. Enum cases
+        // own no symbols and are never filtered.
+        let renderedFields = Array(typeDefinition.fields.enumerated()).filter { isEnum || !isExcludedByExportFilter(field: $0.element) }
+        for (offset, indexedField) in renderedFields.offsetEnumerated() {
+            let fieldIndex = indexedField.offset
+            let field = indexedField.element
             BreakLine()
-            let fieldRecord = fieldRecords[safe: offset.index]
+            let fieldRecord = fieldRecords[safe: fieldIndex]
             let mangledTypeName = try fieldRecord?.mangledTypeName(in: machO)
             // Per-record metadata comments (single source of truth with the
             // `SwiftDump` dumpers): struct/class fields get the offset +
@@ -354,9 +371,36 @@ extension SwiftDeclarationPrinter {
             // block.
             if let mangledTypeName {
                 if isEnum {
-                    try await fieldLayoutRenderer.enumCaseComments(forCaseAtIndex: offset.index, mangledTypeName: mangledTypeName, enumLayout: enumLayout)
+                    try await fieldLayoutRenderer.enumCaseComments(forCaseAtIndex: fieldIndex, mangledTypeName: mangledTypeName, enumLayout: enumLayout)
                 } else {
-                    try await fieldLayoutRenderer.storedFieldComments(forFieldAtIndex: offset.index, mangledTypeName: mangledTypeName, fieldOffsets: fieldOffsets)
+                    try await fieldLayoutRenderer.storedFieldComments(forFieldAtIndex: fieldIndex, mangledTypeName: mangledTypeName, fieldOffsets: fieldOffsets)
+                }
+            }
+            // A non-final stored `var`'s getter/setter occupy vtable slots
+            // (evolution proposal 0006) — surface them with the same comment
+            // the computed members get, so a stored property without any
+            // vtable comment genuinely is statically dispatched rather than
+            // silently unattributed (issue #106 §1).
+            if !isEnum, configuration.printVTableOffset {
+                for accessor in field.accessors {
+                    if let accessorVTableOffset = accessor.vtableOffset {
+                        renderConfiguration.vtableOffsetComment(slotOffset: accessorVTableOffset, label: accessor.kind.addressLabel)
+                    }
+                }
+            }
+            // Export status for stored `var`s whose accessor group joined
+            // (evolution proposal 0008): a field with no accessor symbols
+            // stays silent — "not checked", never "confirmed exported"; the
+            // header digest states this explicitly. The same two exemptions
+            // as `renderMember`: `override` accessors link through the
+            // parent's dispatch thunk, and an `@objc` accessor (identified
+            // by its `To` thunk's presence in the symbol population)
+            // dispatches through objc_msgSend.
+            if !isEnum, configuration.printExportStatus, !field.accessors.isEmpty, !field.isOverride {
+                @Dependency(\.symbolIndexStore) var symbolIndexStore
+                let hasObjCEntryPoint = field.accessors.contains { symbolIndexStore.containsSymbol(named: $0.symbol.name + "To", in: machO) }
+                if !hasObjCEntryPoint, exportVerdict(forSymbolNames: field.accessors.map(\.symbol.name)) == false {
+                    renderConfiguration.exportStatusComment()
                 }
             }
             let substitutedTypeNode: Node? = {

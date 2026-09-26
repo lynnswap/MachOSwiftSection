@@ -1,6 +1,11 @@
 import ArgumentParser
 import Foundation
 import SwiftDiffing
+import SwiftInterface
+import SwiftIndexing
+import MachOKit
+import MachOFoundation
+import Rainbow
 
 struct EvolutionCommand: AsyncParsableCommand {
     static let configuration: CommandConfiguration = .init(
@@ -37,18 +42,37 @@ struct EvolutionCommand: AsyncParsableCommand {
     @Flag(help: "Emit the evolution as JSON instead of the text report.")
     var json: Bool = false
 
+    @Flag(help: "Emit the union Swift interface annotated with per-declaration lifecycle comments instead of the lineage report. Every input must be a binary (or dyld shared cache); snapshot JSON inputs are rejected.")
+    var interface: Bool = false
+
     @Flag(help: "Exit with a nonzero status when any transition contains an ABI-breaking change, for CI gating.")
     var failOnBreaking: Bool = false
 
     @Option(name: .shortAndLong, help: "Write the report to this path instead of stdout.", completion: .file())
     var outputPath: String?
 
+    @Option(name: .long, help: "How many inputs to index at once (default: the processor count). Pass 1 to index the versions one after the other, oldest first.")
+    var jobs: Int?
+
+    /// The concurrency window for indexing the inputs (evolution proposal
+    /// `large-stack-executor-and-cross-version-parallelism`): every input is
+    /// an independent file, so by default up to one per processor index at
+    /// once. Each in-flight input holds its indexed image in memory, which is
+    /// what `--jobs` trades against.
+    private var maximumConcurrentPreparations: Int {
+        jobs ?? ProcessInfo.processInfo.activeProcessorCount
+    }
+
     func run() async throws {
         let explicitLabels = try ABISnapshotInputLoader.parseLabels(labels, inputCount: inputPaths.count)
 
-        var documents: [ABISnapshotDocument] = []
-        for (index, inputPath) in inputPaths.enumerated() {
-            let document = try await ABISnapshotInputLoader.loadDocument(
+        if interface {
+            try await runAnnotatedInterface(explicitLabels: explicitLabels)
+            return
+        }
+
+        let documents = try await Array(inputPaths.enumerated()).concurrentMap(maximumConcurrency: maximumConcurrentPreparations) { index, inputPath in
+            try await ABISnapshotInputLoader.loadDocument(
                 path: inputPath,
                 architecture: architecture,
                 isDyldSharedCache: isDyldSharedCache,
@@ -57,7 +81,6 @@ struct EvolutionCommand: AsyncParsableCommand {
                 label: explicitLabels[index],
                 log: log
             )
-            documents.append(document)
         }
 
         // Snapshot inputs may already carry a provenance label; binaries fall
@@ -89,14 +112,114 @@ struct EvolutionCommand: AsyncParsableCommand {
         }
     }
 
+    /// The `--interface` path: render the union interface with lifecycle
+    /// annotations from N live binaries. The annotated interface renders from
+    /// the live models, so every input must be a binary — a persisted snapshot
+    /// carries no renderable interface (same constraint as `diff --interface`).
+    private func runAnnotatedInterface(explicitLabels: [String?]) async throws {
+        for inputPath in inputPaths {
+            if try ABISnapshotInputLoader.isSnapshotDocument(atPath: inputPath) {
+                throw ValidationError("--interface needs binaries; snapshot JSON inputs (\(inputPath)) only support the lineage report.")
+            }
+        }
+
+        var machOFiles: [MachOFile] = []
+        for inputPath in inputPaths {
+            log("Loading \(inputPath)…")
+            machOFiles.append(try loadMachO(at: inputPath))
+        }
+        let resolvedLabels = inputPaths.enumerated().map { index, inputPath in
+            explicitLabels[index] ?? ABISnapshotInputLoader.defaultLabel(forPath: inputPath)
+        }
+
+        // A sink on every version: each version's builder hands this handler to
+        // its indexer AND printer, so a dropped declaration lands on stderr
+        // instead of the os_log floor a CLI operator never sees. The erased
+        // builder, because the version count is a runtime value here — the
+        // pack-generic SwiftEvolutionInterfaceBuilder's arity is compile-time.
+        let builder = try AnySwiftEvolutionInterfaceBuilder(
+            eventHandlersPerVersion: { _, label in [ConsoleEventHandler(label: label)] },
+            versions: machOFiles,
+            labels: resolvedLabels
+        )
+        log("Indexing \(machOFiles.count) versions (\(min(maximumConcurrentPreparations, machOFiles.count)) at a time)…")
+        try await builder.prepare(maximumConcurrentPreparations: maximumConcurrentPreparations)
+        log("Rendering annotated interface…")
+        let annotated = try await builder.printAnnotatedInterface()
+        try emitInterface(annotated.string)
+
+        if failOnBreaking, let evolution = builder.evolution, evolution.hasBreakingChange {
+            throw ExitCode.failure
+        }
+    }
+
+    /// Loads one `--interface`-path input: an image extracted from a dyld
+    /// shared cache, or a thin/fat file on disk — the same shared
+    /// `MachOFile.load(...)` the rest of the CLI uses (see `DiffCommand`).
+    private func loadMachO(at path: String) throws -> MachOFile {
+        try MachOFile.load(
+            filePath: path,
+            isDyldSharedCache: isDyldSharedCache,
+            usesSystemDyldSharedCache: false,
+            cacheImageName: cacheImageName,
+            cacheImagePath: cacheImagePath,
+            architecture: architecture
+        )
+    }
+
+    /// Writes the annotated interface: plain text to `--output`, or per-line
+    /// colorized to the terminal — legend/warning comments cyan, and each
+    /// annotated line colored by its most severe lifecycle event (removed red,
+    /// modified yellow, added green).
+    private func emitInterface(_ text: String) throws {
+        if let outputPath {
+            try text.write(to: URL(fileURLWithPath: outputPath), atomically: true, encoding: .utf8)
+            log("Annotated interface written to \(outputPath)")
+            return
+        }
+        var output = ""
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let lineText = String(line)
+            if lineText.hasPrefix("//") {
+                // Legend and warnings blocks sit at column 0.
+                output += lineText.cyan
+            } else if let annotationRange = lineText.range(of: "// [") {
+                // A trailing lifecycle annotation, or an overflow annotation on
+                // its own (indented) line. Classify by the annotation text only
+                // so a declaration whose name mentions these words stays plain.
+                let annotation = lineText[annotationRange.lowerBound...]
+                if annotation.contains("removed in") {
+                    output += lineText.red
+                } else if annotation.contains("modified in") {
+                    output += lineText.yellow
+                } else {
+                    output += lineText.green
+                }
+            } else {
+                output += lineText
+            }
+            output += "\n"
+        }
+        print(output, terminator: "")
+    }
+
     /// Rejects flag combinations that would otherwise be silently ignored, so
     /// the user gets immediate feedback instead of a no-op.
     func validate() throws {
+        if interface, json {
+            throw ValidationError("--json and --interface are mutually exclusive.")
+        }
+        if interface, summaryOnly {
+            throw ValidationError("--interface and --summary-only are mutually exclusive.")
+        }
         if inputPaths.count < 2 {
             throw ValidationError("evolution needs at least 2 inputs in version order (oldest first).")
         }
         if json, summaryOnly {
             throw ValidationError("--json and --summary-only are mutually exclusive.")
+        }
+        if let jobs, jobs < 1 {
+            throw ValidationError("--jobs must be at least 1.")
         }
         if cacheImageName != nil, cacheImagePath != nil {
             throw ValidationError("--cache-image-name and --cache-image-path are mutually exclusive; pass only one.")
@@ -110,6 +233,8 @@ struct EvolutionCommand: AsyncParsableCommand {
     }
 
     private func log(_ message: String) {
-        FileHandle.standardError.write(Data((message + "\n").utf8))
+        // See `DiffCommand.log`: the raising `FileHandle` overload aborts the
+        // process on a closed or broken stderr.
+        fputs(message + "\n", stderr)
     }
 }

@@ -3,6 +3,8 @@
 > 承接 [`StaticLayoutEngine.md`](StaticLayoutEngine.md)（单镜像引擎 + existential/actor 支持）。本文把静态 field-offset 引擎从「单镜像」扩展为「依赖闭包」，使字段类型 / 父类 / 协议位于**其他镜像**时也能解析。面向维护者。
 >
 > **状态：已落地。** 下文设计/步骤为原始计划，末尾「落地实测」记录与计划的差异；与实现冲突处以「落地实测」为准。
+>
+> **2026-09-02 更新**：本文描述的定位器（`MachOFileDependencyLocator`）、BFS 遍历与 `LayoutDependencySearchPath` 已下沉为共享模块 `MachODependencies`（提案 [0017](../Evolutions/0017-macho-dependencies-module.md)）；`ImageUniverse.dependencyClosure(root:…)` 工厂现在是 `DependencyClosure` 的薄包装，cache 的 bare name 匹配也从「枚举顺序首写者胜」改为「install path 精确优先、排序兜底」。现行契约以 [Modules/MachODependencies.md](Modules/MachODependencies.md) 为准，本文保留为阶段 3 的设计与实测记录。
 
 ## 背景与目标
 
@@ -127,7 +129,7 @@ ObjC 祖先（`ObjCMembersTest` / `ObjCBridge`）：接 MachOObjCSection 读 `cl
 ## 关键文件
 
 - 复用：`Sources/SwiftInterface/SwiftInterfaceBuilderDependencies.swift`（依赖解析两条路径）、`Sources/SwiftInterface/DependencyPath.swift`
-- 复用：`Sources/MachOExtensions/DyldCache+.swift`（`machOFile(by:)`、bare-name 匹配）、`MachORepresentableWithCache.swift`（`imagePath` / `cache`）
+- 复用：上游包 `MachOKitExtensions` 的 `DyldCache+.swift`（`machOFile(by:)`、bare-name 匹配）、`MachORepresentableWithCache.swift`（`imagePath` / `cache`）
 - 改动：`Sources/SwiftLayout/ImageUniverse.swift`、`Sources/SwiftLayout/ImageReference.swift`（**仅这两个** + 新增便利工厂文件）
 - 不动：`StaticTypeLayoutResolver.swift`、`BasicLayout.swift`、`ExistentialLayoutBridge.swift`、`EnumLayoutBridge.swift`
 - runtime 参照：`/Volumes/SwiftProjects/swift-project/swift/stdlib/public/runtime/Metadata.cpp:3767-3830`（class 字段布局 + Swift/ObjC 父类分派）
@@ -148,6 +150,6 @@ ObjC 祖先（`ObjCMembersTest` / `ObjCBridge`）：接 MachOObjCSection 读 `cl
 
 6. **resilient 验证只能走字面值。** 计划首选「读 `…Wvd` field-offset global」。实测 `ResilientChild`/`ResilientObjCStubChild` 这类 resilient 子类**根本不 emit `…Wvd`**（偏移纯运行时计算），runtime vector 也为空。故采用计划的 option 2（字面值锁定），但字面值由跨模块父类的静态 instanceSize 推导（`ResilientChild.extraField = 24`、`ResilientObjCStubChild.stubField = 16`），并辅以 `DistributedActorTest` 对非空 runtime vector `[16, 112, 128]` 的**自动**逐字段校验。
 
-7. **`DependencyPath` 未复用，改本地 `LayoutDependencySearchPath`。** `DependencyPath` 在 `SwiftInterface`（上层 orchestrator），`SwiftLayout` 依赖它会造成层级倒置。新增的 `LayoutDependencySearchPath`（`.machOFile` / `.dyldSharedCache` / `.systemDyldSharedCache`）是 SwiftLayout 本地等价物。`SwiftLayout` 仅新增对 `MachOExtensions` 的依赖（复用 `File.loadFromFile` / `machOFile(by:)`）。
+7. **`DependencyPath` 未复用，改本地 `LayoutDependencySearchPath`。** `DependencyPath` 在 `SwiftInterface`（上层 orchestrator），`SwiftLayout` 依赖它会造成层级倒置。新增的 `LayoutDependencySearchPath`（`.machOFile` / `.dyldSharedCache` / `.systemDyldSharedCache`）是 SwiftLayout 本地等价物。`SwiftLayout` 仅新增对 `MachOKitExtensions`（当时还是仓库内的 `MachOExtensions` target）的依赖（复用 `File.loadFromFile` / `machOFile(by:)`）。
 
 8. **典型决策保持。** 镜像同构（按 root 类型 `MachOImage`/`MachOFile` 各自闭包，无类型擦除）、求解器零改动（只经两个 seam）、降级语义保持（定位不到的依赖按字段降级不 panic）均如计划落地。

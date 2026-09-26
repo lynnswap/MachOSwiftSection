@@ -19,6 +19,24 @@ public struct SwiftDeclarationPrintConfiguration: Equatable, Sendable {
     public var printMemberAddress: Bool = false
     public var printVTableOffset: Bool = false
     public var printPWTOffset: Bool = false
+
+    /// Emit a `// not exported` comment on members none of whose symbols
+    /// have an export-trie entry (evolution proposal 0008). A symbol-table
+    /// FACT, not an access-level guess; nothing is emitted when the image
+    /// carries no export information.
+    public var printExportStatus: Bool = false
+
+    /// Print only the declarations the image EXPORTS (evolution proposal
+    /// `exported-only-interface`) — the filtering counterpart of
+    /// `printExportStatus`. Types / protocols are ruled by their descriptor
+    /// symbol (`…Mn` / `…Mp`) in the export trie, members by the same
+    /// derived-form verdict the annotation uses, extensions by whether their
+    /// target is an in-image non-exported declaration (see
+    /// `ExportFilterScope`). Still a symbol-table FACT: a declaration is
+    /// dropped only on a definitive negative — anything without evidence
+    /// (no export information, no joined symbols, `override` / `@objc`
+    /// members) is kept, so the filter never drops on a guess.
+    public var printExportedDeclarationsOnly: Bool = false
     public var memberSortOrder: SwiftDeclarationMemberSortOrder = .byCategory
     public var printTypeLayout: Bool = false
     public var printEnumLayout: Bool = false

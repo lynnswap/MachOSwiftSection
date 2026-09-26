@@ -1,3 +1,4 @@
+import Foundation
 import SwiftDeclaration
 import SwiftAttributeInference
 import MachOSwiftSection
@@ -21,10 +22,33 @@ public final class SwiftDeclarationPrinter<MachO: FieldLayoutRenderable>: Sendab
     @Mutex
     public private(set) var configuration: SwiftDeclarationPrintConfiguration = .init()
 
-    @Mutex
-    public private(set) var typeNameResolvers: [any TypeNameResolvable] = []
+    /// Resolvers binned per role at registration time (`addTypeNameResolver`),
+    /// so each delegate query walks only the resolvers that can answer it and
+    /// the print path never runs a conformance cast.
+    private struct TypeNameResolverRegistry: Sendable {
+        var moduleNameResolvers: [any ModuleNameResolving] = []
+        var cImportedNameResolvers: [any CImportedNameResolving] = []
+        var opaqueTypeResolvers: [any OpaqueTypeResolving] = []
+    }
 
-    let eventDispatcher: SwiftIndexEvents.Dispatcher = .init()
+    @Mutex
+    private var typeNameResolverRegistry: TypeNameResolverRegistry = .init()
+
+    /// The in-image non-exported declaration names the exported-only filter
+    /// consults for `extension` targets — installed by
+    /// `installExportFilterScope(types:protocols:)`, consulted only while
+    /// `configuration.printExportedDeclarationsOnly` is set.
+    @Mutex
+    var exportFilterScope: ExportFilterScope = .empty
+
+    /// `package` so in-package renderers that drive this printer — notably
+    /// ``SwiftDiffableInterfaceRenderer`` — report their own degradations into
+    /// the same sinks rather than inventing a second reporting channel.
+    ///
+    /// Injectable for the same reason: a renderer that already owns an indexer's
+    /// dispatcher passes it straight in, so one set of handlers covers indexing
+    /// and printing alike.
+    package let eventDispatcher: SwiftIndexEvents.Dispatcher
 
     @Mutex
     var typeDemangleResolver: DemangleResolver = .using(options: .default)
@@ -75,8 +99,31 @@ public final class SwiftDeclarationPrinter<MachO: FieldLayoutRenderable>: Sendab
 
     public init(configuration: SwiftDeclarationPrintConfiguration = .init(), eventHandlers: [SwiftIndexEvents.Handler] = [], in machO: MachO) {
         self.machO = machO
+        // Before `configuration`: that property is `@Mutex`-wrapped with a
+        // default, so assigning it counts as using `self`, which is only legal
+        // once every stored property is initialized.
+        self.eventDispatcher = .init()
         self.configuration = configuration
         eventDispatcher.addHandlers(eventHandlers)
+        self.typeDemangleResolver = .using { [weak self] node in
+            if let self {
+                var printer = TypeNodePrinter(delegate: self)
+                try await printer.printRoot(node)
+            }
+        }
+    }
+
+    /// Builds a printer that reports into an existing dispatcher.
+    ///
+    /// For a caller that already owns one — ``SwiftDiffableInterfaceRenderer``
+    /// shares its indexer's — so indexing and printing land in one set of sinks
+    /// and the host attaches handlers once. `Handler` is not `Sendable`, so
+    /// passing the dispatcher is also the only way to carry sinks across a
+    /// `Sendable` boundary.
+    package init(configuration: SwiftDeclarationPrintConfiguration = .init(), eventDispatcher: SwiftIndexEvents.Dispatcher, in machO: MachO) {
+        self.machO = machO
+        self.eventDispatcher = eventDispatcher
+        self.configuration = configuration
         self.typeDemangleResolver = .using { [weak self] node in
             if let self {
                 var printer = TypeNodePrinter(delegate: self)
@@ -93,16 +140,53 @@ public final class SwiftDeclarationPrinter<MachO: FieldLayoutRenderable>: Sendab
         _memoizedStaticFieldLayoutProvider.withLock { $0 = .uncomputed }
     }
 
-    public func addTypeNameResolver(_ resolver: any TypeNameResolvable) {
-        typeNameResolvers.append(resolver)
+    public func addTypeNameResolver(_ resolver: any TypeNameResolving) {
+        _typeNameResolverRegistry.withLock { registry in
+            var matchedAnyRole = false
+            if let moduleNameResolver = resolver as? any ModuleNameResolving {
+                registry.moduleNameResolvers.append(moduleNameResolver)
+                matchedAnyRole = true
+            }
+            if let cImportedNameResolver = resolver as? any CImportedNameResolving {
+                registry.cImportedNameResolvers.append(cImportedNameResolver)
+                matchedAnyRole = true
+            }
+            if let opaqueTypeResolver = resolver as? any OpaqueTypeResolving {
+                registry.opaqueTypeResolvers.append(opaqueTypeResolver)
+                matchedAnyRole = true
+            }
+            assert(matchedAnyRole, "resolver conforms to no role protocol and would never be consulted")
+        }
     }
 
     public func removeAllTypeNameResolvers() {
-        typeNameResolvers.removeAll()
+        typeNameResolverRegistry = .init()
+    }
+
+    /// Exported-only gate (evolution proposal `exported-only-interface`):
+    /// a type whose descriptor provably is not exported renders as NOTHING —
+    /// an empty result every enclosing `BlockList` / `NestedDeclaration`
+    /// skips without a stray break. Ruled before the start event, so a
+    /// filtered definition leaves no unpaired `definitionPrintStarted`.
+    ///
+    /// The four per-definition entries (`printTypeDefinition` /
+    /// `printProtocolDefinition` / `printExtensionDefinition` /
+    /// `printDefinition`) run on the demangler's large-stack task executor
+    /// (`LargeStackTaskExecution.run`, evolution proposal
+    /// `large-stack-executor-and-cross-version-parallelism`): a host printing
+    /// one declaration at a time — RuntimeViewer's per-type export bypasses
+    /// `printRoot` — gets inline demangling too. Reached from `printRoot` or
+    /// from a parent's nested-children loop the task is already on the
+    /// executor and the wrap is a no-op.
+    public func printTypeDefinition(_ typeDefinition: TypeDefinition, level: Int = 1, displayParentName: Bool = false) async throws -> SemanticString {
+        guard !isExcludedByExportFilter(typeDefinition) else { return SemanticString() }
+        return try await LargeStackTaskExecution.run {
+            try await printIncludedTypeDefinition(typeDefinition, level: level, displayParentName: displayParentName)
+        }
     }
 
     @SemanticStringBuilder
-    public func printTypeDefinition(_ typeDefinition: TypeDefinition, level: Int = 1, displayParentName: Bool = false) async throws -> SemanticString {
+    private func printIncludedTypeDefinition(_ typeDefinition: TypeDefinition, level: Int, displayParentName: Bool) async throws -> SemanticString {
         let printingContext = SwiftIndexEvents.PrintingContext(name: typeDefinition.typeName.name, kind: .type)
         eventDispatcher.dispatch(.definitionPrintStarted(context: printingContext))
 
@@ -127,22 +211,47 @@ public final class SwiftDeclarationPrinter<MachO: FieldLayoutRenderable>: Sendab
         // dump path performs via `TypedDumper.boundDumpedTypeNode()`.
         let specializedMetadata: MetadataWrapper? = typeDefinition.isSpecialized ? typeDefinition.metadata : nil
 
+        // This print operation's single wrapper materialization (proposal
+        // 0002), threaded into the header and field renderers below.
+        let materializedTypeContext = try typeDefinition.materializedTypeContext(in: machO)
+
         try await DeclarationBlock(level: level) {
-            try await renderTypeDeclarationHeader(for: typeDefinition.type, displayParentName: displayParentName, level: level, specializedMetadata: specializedMetadata)
+            try await renderTypeDeclarationHeader(for: materializedTypeContext, displayParentName: displayParentName, level: level, specializedMetadata: specializedMetadata)
         } body: {
+            // Per-CHILD catch: one nested child whose printing throws drops
+            // only itself — the same per-definition contract `printRoot`
+            // applies at the top level, pushed into the nested loops. A
+            // child's throw once escaped here and the top-level catch
+            // discarded the whole enclosing type.
             for child in typeDefinition.typeChildren {
-                try await NestedDeclaration {
-                    try await printTypeDefinition(child, level: level + 1)
+                if let renderedChild = await printCatchedThrowing(
+                    dispatchingTo: eventDispatcher,
+                    context: .init(name: child.typeName.name, kind: .type),
+                    {
+                        try await NestedDeclaration {
+                            try await printTypeDefinition(child, level: level + 1)
+                        }
+                    }
+                ) {
+                    renderedChild
                 }
             }
 
             for child in typeDefinition.protocolChildren {
-                try await NestedDeclaration {
-                    try await printProtocolDefinition(child, level: level + 1)
+                if let renderedChild = await printCatchedThrowing(
+                    dispatchingTo: eventDispatcher,
+                    context: .init(name: child.protocolName.name, kind: .protocol),
+                    {
+                        try await NestedDeclaration {
+                            try await printProtocolDefinition(child, level: level + 1)
+                        }
+                    }
+                ) {
+                    renderedChild
                 }
             }
 
-            try await renderModelFields(typeDefinition, level: level)
+            try await renderModelFields(typeDefinition, typeContext: materializedTypeContext, level: level)
 
             try await printDefinition(typeDefinition, level: level)
         }
@@ -150,19 +259,44 @@ public final class SwiftDeclarationPrinter<MachO: FieldLayoutRenderable>: Sendab
         eventDispatcher.dispatch(.definitionPrintCompleted(context: printingContext))
     }
 
-    @SemanticStringBuilder
+    /// Exported-only gate, same contract as `printTypeDefinition`: a protocol
+    /// whose descriptor provably is not exported renders as nothing — its
+    /// trailing default-implementation extensions go with it.
     public func printProtocolDefinition(_ protocolDefinition: ProtocolDefinition, level: Int = 1, displayParentName: Bool = false) async throws -> SemanticString {
-        let printingContext = SwiftIndexEvents.PrintingContext(name: protocolDefinition.protocol.name, kind: .protocol)
+        guard !isExcludedByExportFilter(protocolDefinition) else { return SemanticString() }
+        return try await LargeStackTaskExecution.run {
+            try await printIncludedProtocolDefinition(protocolDefinition, level: level, displayParentName: displayParentName)
+        }
+    }
+
+    @SemanticStringBuilder
+    private func printIncludedProtocolDefinition(_ protocolDefinition: ProtocolDefinition, level: Int, displayParentName: Bool) async throws -> SemanticString {
+        // Context and start event FIRST, exactly like `printTypeDefinition`.
+        // The materialization below throws (proposal 0002 rebuilt the wrapper
+        // from its descriptor), and a failure that precedes the start event
+        // makes the caller's catch dispatch a `definitionPrintFailed` with no
+        // matching start — an event consumer cannot pair those.
+        //
+        // The name is the QUALIFIED one: `printTypeDefinition`'s context and
+        // every caller-side failure context in `SwiftInterfaceBuilder` use
+        // `DefinitionName.name`, while `Protocol.name` is the descriptor's BARE
+        // name ("View" against "SwiftUI.View"), so the two events named the same
+        // protocol two different ways and could not be correlated at all.
+        let printingContext = SwiftIndexEvents.PrintingContext(name: protocolDefinition.protocolName.name, kind: .protocol)
         eventDispatcher.dispatch(.definitionPrintStarted(context: printingContext))
+
+        // This print operation's single wrapper materialization (proposal
+        // 0002), threaded into the header and associated-type renderers below.
+        let dumpedProtocol = try protocolDefinition.materializedProtocol(in: machO)
 
         if !protocolDefinition.isIndexed {
             try await protocolDefinition.index(in: machO)
         }
 
         try await DeclarationBlock(level: level) {
-            try await renderProtocolDeclarationHeader(for: protocolDefinition.protocol, displayParentName: displayParentName)
+            try await renderProtocolDeclarationHeader(for: dumpedProtocol, displayParentName: displayParentName)
         } body: {
-            try await renderProtocolAssociatedTypes(for: protocolDefinition.protocol, level: level)
+            try await renderProtocolAssociatedTypes(for: dumpedProtocol, level: level)
 
             try await printDefinition(protocolDefinition, level: level)
 
@@ -177,9 +311,16 @@ public final class SwiftDeclarationPrinter<MachO: FieldLayoutRenderable>: Sendab
         }
 
         if protocolDefinition.parent == nil {
-            try await BlockList {
+            // Per-extension catch: a default-implementation extension whose
+            // printing throws drops only itself, not the protocol it trails.
+            await BlockList {
                 for extensionDefinition in protocolDefinition.defaultImplementationExtensions {
-                    try await printExtensionDefinition(extensionDefinition)
+                    await printCatchedThrowing(
+                        dispatchingTo: eventDispatcher,
+                        context: .init(name: extensionDefinition.extensionName.name, kind: .extension)
+                    ) {
+                        try await printExtensionDefinition(extensionDefinition)
+                    }
                 }
             }
         }
@@ -187,8 +328,22 @@ public final class SwiftDeclarationPrinter<MachO: FieldLayoutRenderable>: Sendab
         eventDispatcher.dispatch(.definitionPrintCompleted(context: printingContext))
     }
 
-    @SemanticStringBuilder
+    /// Exported-only gate for extensions. Two rules, ruled at different
+    /// points: an extension TARGETING an in-image non-exported declaration
+    /// is dropped before any event (like a filtered type); a non-conformance
+    /// extension the filter EMPTIES needs its members, which only
+    /// `index(in:)` provides, so that rule is evaluated after the start
+    /// event and the index — and reports a paired completion around an
+    /// empty result, keeping the event stream's start/completion pairing
+    /// intact on that path too.
     public func printExtensionDefinition(_ extensionDefinition: ExtensionDefinition, level: Int = 1) async throws -> SemanticString {
+        guard !isExcludedByExportFilter(extensionDefinition) else { return SemanticString() }
+        return try await LargeStackTaskExecution.run {
+            try await printExtensionDefinitionContents(extensionDefinition, level: level)
+        }
+    }
+
+    private func printExtensionDefinitionContents(_ extensionDefinition: ExtensionDefinition, level: Int) async throws -> SemanticString {
         let printingContext = SwiftIndexEvents.PrintingContext(name: extensionDefinition.extensionName.name, kind: .extension)
         eventDispatcher.dispatch(.definitionPrintStarted(context: printingContext))
 
@@ -196,18 +351,50 @@ public final class SwiftDeclarationPrinter<MachO: FieldLayoutRenderable>: Sendab
             try await extensionDefinition.index(in: machO)
         }
 
+        let rendered: SemanticString
+        if isEmptiedByExportFilter(extensionDefinition) {
+            rendered = SemanticString()
+        } else {
+            rendered = try await printIncludedExtensionDefinition(extensionDefinition, level: level)
+        }
+
+        eventDispatcher.dispatch(.definitionPrintCompleted(context: printingContext))
+        return rendered
+    }
+
+    @SemanticStringBuilder
+    private func printIncludedExtensionDefinition(_ extensionDefinition: ExtensionDefinition, level: Int) async throws -> SemanticString {
         try await DeclarationBlock(level: level) {
             try await printExtensionHeader(extensionDefinition, level: level)
         } body: {
+            // Per-CHILD catch, same contract as `printTypeDefinition`'s
+            // nested loops: a nested definition whose printing throws
+            // drops only itself, never the whole extension.
             for typeDefinition in extensionDefinition.types {
-                try await NestedDeclaration {
-                    try await printTypeDefinition(typeDefinition, level: level + 1)
+                if let renderedChild = await printCatchedThrowing(
+                    dispatchingTo: eventDispatcher,
+                    context: .init(name: typeDefinition.typeName.name, kind: .type),
+                    {
+                        try await NestedDeclaration {
+                            try await printTypeDefinition(typeDefinition, level: level + 1)
+                        }
+                    }
+                ) {
+                    renderedChild
                 }
             }
 
             for protocolDefinition in extensionDefinition.protocols {
-                try await NestedDeclaration {
-                    try await printProtocolDefinition(protocolDefinition, level: level + 1)
+                if let renderedChild = await printCatchedThrowing(
+                    dispatchingTo: eventDispatcher,
+                    context: .init(name: protocolDefinition.protocolName.name, kind: .protocol),
+                    {
+                        try await NestedDeclaration {
+                            try await printProtocolDefinition(protocolDefinition, level: level + 1)
+                        }
+                    }
+                ) {
+                    renderedChild
                 }
             }
 
@@ -217,8 +404,6 @@ public final class SwiftDeclarationPrinter<MachO: FieldLayoutRenderable>: Sendab
 
             try await printDefinition(extensionDefinition, level: 1)
         }
-
-        eventDispatcher.dispatch(.definitionPrintCompleted(context: printingContext))
     }
 
     /// Renders an extension's header line (`extension Foo : Bar where …`) with no
@@ -231,6 +416,18 @@ public final class SwiftDeclarationPrinter<MachO: FieldLayoutRenderable>: Sendab
         Space()
         extensionDefinition.extensionName.print()
 
+        // This print operation's single conformance materialization
+        // (proposal 0002). Propagates on failure: a public entry must not
+        // hold a weaker error contract than the `index(in:)` that precedes
+        // it on every in-repo path — both run this same materialization, so
+        // in-repo the throw is unreachable, but an external caller invoking
+        // this entry directly on an un-indexed definition would otherwise
+        // get a confidently wrong `extension Foo` header with the
+        // conformance clause, `@retroactive`, and global-actor markers
+        // silently missing (a `try?` here once conflated that failure with
+        // "no conformance at all").
+        let materializedProtocolConformance = try extensionDefinition.materializedProtocolConformance(in: machO)
+
         // Pre-leaf-migration `dumpProtocolName` semantics: a `nil` protocol
         // node collapses to an *empty* name but still emits the clause (the
         // dangling `extension Foo: @retroactive ` form), while a *thrown*
@@ -239,7 +436,7 @@ public final class SwiftDeclarationPrinter<MachO: FieldLayoutRenderable>: Sendab
         // including its `@retroactive` / global-actor markers — whenever the
         // reference was unresolvable.
         let conformanceProtocolName: SemanticString? = {
-            guard let protocolConformance = extensionDefinition.protocolConformance else { return nil }
+            guard let protocolConformance = materializedProtocolConformance else { return nil }
             do {
                 let protocolNode = try protocolConformance.protocolNode(in: machO)
                 return protocolNode?.printSemantic(using: .interfaceTypeBuilderOnly) ?? SemanticString()
@@ -247,7 +444,7 @@ public final class SwiftDeclarationPrinter<MachO: FieldLayoutRenderable>: Sendab
                 return nil
             }
         }()
-        if let protocolConformance = extensionDefinition.protocolConformance,
+        if let protocolConformance = materializedProtocolConformance,
            let protocolName = conformanceProtocolName {
             Standard(":")
             Space()
@@ -274,7 +471,7 @@ public final class SwiftDeclarationPrinter<MachO: FieldLayoutRenderable>: Sendab
                     Space()
                 }
 
-                try await printThrowingType(node, isProtocol: extensionDefinition.extensionName.isProtocol, level: level)
+                try await printThrowingType(node.materialize(), isProtocol: extensionDefinition.extensionName.isProtocol, level: level)
 
                 if index < nodes.count - 1 {
                     Standard(",")
@@ -284,8 +481,14 @@ public final class SwiftDeclarationPrinter<MachO: FieldLayoutRenderable>: Sendab
         }
     }
 
-    @SemanticStringBuilder
     public func printDefinition(_ definition: some Definition, level: Int = 1) async throws -> SemanticString {
+        try await LargeStackTaskExecution.run {
+            try await printDefinitionContents(definition, level: level)
+        }
+    }
+
+    @SemanticStringBuilder
+    private func printDefinitionContents(_ definition: some Definition, level: Int) async throws -> SemanticString {
         if let mutableDefinition = definition as? MutableDefinition, !mutableDefinition.isIndexed {
             try await mutableDefinition.index(in: machO)
         }
@@ -306,11 +509,12 @@ public final class SwiftDeclarationPrinter<MachO: FieldLayoutRenderable>: Sendab
         let emitOffsetComment = isProtocol ? configuration.printPWTOffset : configuration.printFieldOffset
         let printMemberAddress = configuration.printMemberAddress
         let printVTableOffset = configuration.printVTableOffset
+        let printExportStatus = configuration.printExportStatus
         let vtableTransformerClosure = vtableOffsetTransformerClosure
 
         await MemberList(level: level) {
-            for member in definition.orderedMembers {
-                await renderMember(member, level: level, offsetCommentPrefix: offsetCommentPrefix, emitOffsetComment: emitOffsetComment, printVTableOffset: printVTableOffset, printMemberAddress: printMemberAddress, vtableTransformerClosure: vtableTransformerClosure)
+            for member in definition.orderedMembers where !isExcludedByExportFilter(member) {
+                await renderMember(member, level: level, offsetCommentPrefix: offsetCommentPrefix, emitOffsetComment: emitOffsetComment, printVTableOffset: printVTableOffset, printMemberAddress: printMemberAddress, printExportStatus: printExportStatus, vtableTransformerClosure: vtableTransformerClosure)
             }
 
             // Terminal step: emit `deinit` for classes and noncopyable
@@ -324,8 +528,8 @@ public final class SwiftDeclarationPrinter<MachO: FieldLayoutRenderable>: Sendab
             // body on classes. The destructor variant collapses to nothing
             // when the type is an actor or value type.
             if let typeDefinition = definition as? TypeDefinition, let deallocatorSymbol = typeDefinition.deallocatorSymbol {
-                AddressComment(addressString: memberAddressString(forOffset: deallocatorSymbol.symbol.offset), emit: printMemberAddress)
-                AddressComment(addressString: memberAddressString(forOffset: typeDefinition.destructorSymbol?.symbol.offset), label: "destructor", emit: printMemberAddress)
+                AddressComment(addressString: memberAddressString(forOffset: deallocatorSymbol.offset), emit: printMemberAddress)
+                AddressComment(addressString: memberAddressString(forOffset: typeDefinition.destructorSymbol?.offset), label: "destructor", emit: printMemberAddress)
                 Keyword(.deinit)
             }
         }
@@ -337,12 +541,13 @@ public final class SwiftDeclarationPrinter<MachO: FieldLayoutRenderable>: Sendab
         let emitOffsetComment = isProtocol ? configuration.printPWTOffset : configuration.printFieldOffset
         let printMemberAddress = configuration.printMemberAddress
         let printVTableOffset = configuration.printVTableOffset
+        let printExportStatus = configuration.printExportStatus
         let vtableTransformerClosure = vtableOffsetTransformerClosure
 
         for category in MemberCategory.allCases {
             await MemberList(level: level) {
-                for member in definition.members(in: category) {
-                    await renderMember(member, level: level, offsetCommentPrefix: offsetCommentPrefix, emitOffsetComment: emitOffsetComment, printVTableOffset: printVTableOffset, printMemberAddress: printMemberAddress, vtableTransformerClosure: vtableTransformerClosure)
+                for member in definition.members(in: category) where !isExcludedByExportFilter(member) {
+                    await renderMember(member, level: level, offsetCommentPrefix: offsetCommentPrefix, emitOffsetComment: emitOffsetComment, printVTableOffset: printVTableOffset, printMemberAddress: printMemberAddress, printExportStatus: printExportStatus, vtableTransformerClosure: vtableTransformerClosure)
                 }
             }
         }
@@ -352,8 +557,8 @@ public final class SwiftDeclarationPrinter<MachO: FieldLayoutRenderable>: Sendab
         // and the rationale behind the two address comments.
         if let typeDefinition = definition as? TypeDefinition, let deallocatorSymbol = typeDefinition.deallocatorSymbol {
             MemberList(level: level) {
-                AddressComment(addressString: memberAddressString(forOffset: deallocatorSymbol.symbol.offset), emit: printMemberAddress)
-                AddressComment(addressString: memberAddressString(forOffset: typeDefinition.destructorSymbol?.symbol.offset), label: "destructor", emit: printMemberAddress)
+                AddressComment(addressString: memberAddressString(forOffset: deallocatorSymbol.offset), emit: printMemberAddress)
+                AddressComment(addressString: memberAddressString(forOffset: typeDefinition.destructorSymbol?.offset), label: "destructor", emit: printMemberAddress)
                 Keyword(.deinit)
             }
         }
@@ -378,6 +583,7 @@ public final class SwiftDeclarationPrinter<MachO: FieldLayoutRenderable>: Sendab
         emitOffsetComment: Bool,
         printVTableOffset: Bool,
         printMemberAddress: Bool,
+        printExportStatus: Bool,
         vtableTransformerClosure: (@Sendable (Int, String?) -> SemanticString)?
     ) async -> SemanticString {
         await Rows(level: level) {
@@ -386,6 +592,24 @@ public final class SwiftDeclarationPrinter<MachO: FieldLayoutRenderable>: Sendab
                 OffsetComment(prefix: offsetCommentPrefix, offset: function.offset, emit: emitOffsetComment)
                 VTableOffsetComment(vtableOffset: function.vtableOffset, emit: printVTableOffset, transformer: vtableTransformerClosure)
                 AddressComment(addressString: memberAddressString(forOffset: function.symbol.offset), emit: printMemberAddress)
+                // Qualifies the address above (evolution proposal 0007): the
+                // witness resolved to a protocol-extension DEFAULT — the code
+                // lives on the protocol, and several such witnesses typically
+                // share one identical-code-folded address.
+                if printMemberAddress, function.isProtocolExtensionDefault {
+                    Comment("protocol-extension default")
+                }
+                // Export status is only ruled on for members whose OWN
+                // symbols are the linkage surface: an `override` links
+                // through the PARENT's dispatch thunk and an `@objc` member
+                // dispatches through objc_msgSend, so both routinely carry
+                // zero exported symbols of their own while being perfectly
+                // reachable — annotating them would be a false positive
+                // (verified on the fixture: `public override` and
+                // `@objc public dynamic` members both trie-miss).
+                if printExportStatus, !function.isOverride, !function.attributes.contains(.objc) {
+                    ExportStatusComment(isExported: exportVerdict(forSymbolNames: [function.symbol.name]))
+                }
                 await printFunction(function, level: level)
 
             case .variable(let variable):
@@ -393,6 +617,12 @@ public final class SwiftDeclarationPrinter<MachO: FieldLayoutRenderable>: Sendab
                 for accessor in variable.accessors {
                     VTableOffsetComment(vtableOffset: accessor.vtableOffset, label: accessor.kind.addressLabel, emit: printVTableOffset, transformer: vtableTransformerClosure)
                     AddressComment(addressString: memberAddressString(forOffset: accessor.symbol.offset), label: accessor.kind.addressLabel, emit: printMemberAddress)
+                }
+                if printMemberAddress, variable.isProtocolExtensionDefault {
+                    Comment("protocol-extension default")
+                }
+                if printExportStatus, !variable.isOverride, !variable.attributes.contains(.objc) {
+                    ExportStatusComment(isExported: exportVerdict(forSymbolNames: variable.accessors.map(\.symbol.name)))
                 }
                 await printVariable(variable, level: level)
 
@@ -402,9 +632,52 @@ public final class SwiftDeclarationPrinter<MachO: FieldLayoutRenderable>: Sendab
                     VTableOffsetComment(vtableOffset: accessor.vtableOffset, label: accessor.kind.addressLabel, emit: printVTableOffset, transformer: vtableTransformerClosure)
                     AddressComment(addressString: memberAddressString(forOffset: accessor.symbol.offset), label: accessor.kind.addressLabel, emit: printMemberAddress)
                 }
+                if printMemberAddress, `subscript`.isProtocolExtensionDefault {
+                    Comment("protocol-extension default")
+                }
+                if printExportStatus, !`subscript`.isOverride, !`subscript`.attributes.contains(.objc) {
+                    ExportStatusComment(isExported: exportVerdict(forSymbolNames: `subscript`.accessors.map(\.symbol.name)))
+                }
                 await printSubscript(`subscript`, level: level)
             }
         }
+    }
+
+    /// Export-status line for a TOP-LEVEL declaration (global variable /
+    /// function), rendered by `SwiftInterfaceBuilder.printRoot`'s globals
+    /// blocks — those never route through `renderMember`, so without this
+    /// the flag would silently skip them. Globals need no `override`/`@objc`
+    /// exemption (neither exists at top level). Renders empty when nothing
+    /// should be emitted (flag off, or no negative verdict).
+    @SemanticStringBuilder
+    package func globalExportStatusComment(forSymbolNames symbolNames: [String]) -> SemanticString {
+        if configuration.printExportStatus, exportVerdict(forSymbolNames: symbolNames) == false {
+            // No trailing `BreakLine()`: the caller is a `BlockList`, which
+            // already emits one leading break per non-empty item, so a break
+            // here would separate the comment from the declaration it
+            // annotates by a blank line (the member path's `Rows` keeps
+            // `ExportStatusComment` adjacent the same way).
+            Comment("not exported")
+        }
+    }
+
+    /// The member-level export verdict backing `ExportStatusComment`
+    /// (evolution proposal 0008): `false` only when EVERY symbol of the
+    /// member provably lacks an export-trie entry, `true` as soon as one is
+    /// exported, `nil` when there is no evidence to rule on — no symbols
+    /// joined, or the image carries no export information at all — so the
+    /// annotation never fires on a guess. Internal (not private): the
+    /// stored-field leg lives in `SwiftDeclarationPrinter+Headers.swift`.
+    func exportVerdict(forSymbolNames symbolNames: [String]) -> Bool? {
+        guard !symbolNames.isEmpty else { return nil }
+        @Dependency(\.symbolIndexStore) var symbolIndexStore
+        for symbolName in symbolNames {
+            guard let isExported = symbolIndexStore.isExportedIncludingDerivedSymbols(name: symbolName, in: machO) else { return nil }
+            if isExported {
+                return true
+            }
+        }
+        return false
     }
 
     @SemanticStringBuilder
@@ -430,7 +703,7 @@ public final class SwiftDeclarationPrinter<MachO: FieldLayoutRenderable>: Sendab
 
     @SemanticStringBuilder
     public func printType(_ typeNode: Node, isProtocol: Bool, level: Int) async -> SemanticString {
-        await printCatchedThrowing {
+        await printCatchedThrowing(dispatchingTo: eventDispatcher, degradationSource: .typeNodeRendering) {
             try await printThrowingType(typeNode, isProtocol: isProtocol, level: level)
         }
     }
@@ -450,8 +723,8 @@ public final class SwiftDeclarationPrinter<MachO: FieldLayoutRenderable>: Sendab
             Keyword(attribute.keyword)
             Space()
         }
-        var printer = VariableNodePrinter(isStored: variable.isStored, isOverride: variable.isOverride, isClassMember: variable.isClassMember, hasSetter: variable.hasSetter, indentation: level, delegate: self)
-        try await printer.printRoot(variable.node)
+        var printer = VariableNodePrinter(isStored: variable.isStored, isOverride: variable.isOverride, isClassMember: variable.isClassMember, isFinal: variable.isFinal, hasSetter: variable.hasSetter, indentation: level, delegate: self)
+        try await printer.printRoot(variable.node.materialize())
     }
 
     @SemanticStringBuilder
@@ -460,8 +733,8 @@ public final class SwiftDeclarationPrinter<MachO: FieldLayoutRenderable>: Sendab
             Keyword(attribute.keyword)
             Space()
         }
-        var printer = FunctionNodePrinter(isOverride: function.isOverride, isClassMember: function.isClassMember, delegate: self)
-        try await printer.printRoot(function.node)
+        var printer = FunctionNodePrinter(isOverride: function.isOverride, isClassMember: function.isClassMember, isFinal: function.isFinal, delegate: self)
+        try await printer.printRoot(function.node.materialize())
     }
 
     @SemanticStringBuilder
@@ -470,14 +743,31 @@ public final class SwiftDeclarationPrinter<MachO: FieldLayoutRenderable>: Sendab
             Keyword(attribute.keyword)
             Space()
         }
-        var printer = SubscriptNodePrinter(isOverride: `subscript`.isOverride, isClassMember: `subscript`.isClassMember, hasSetter: `subscript`.hasSetter, indentation: level, delegate: self)
-        try await printer.printRoot(`subscript`.node)
+        var printer = SubscriptNodePrinter(isOverride: `subscript`.isOverride, isClassMember: `subscript`.isClassMember, isFinal: `subscript`.isFinal, hasSetter: `subscript`.hasSetter, indentation: level, delegate: self)
+        try await printer.printRoot(`subscript`.node.materialize())
     }
 
     @SemanticStringBuilder
     public func printThrowingType(_ typeNode: Node, isProtocol: Bool, level: Int) async throws -> SemanticString {
         var printer = TypeNodePrinter(delegate: self, isProtocol: isProtocol)
         try await printer.printRoot(typeNode)
+    }
+
+    /// Routes an opaque-type rewrite failure into this printer's event stream.
+    ///
+    /// `Node+OpaqueType` lives in `SwiftDeclarationRendering`, which
+    /// `SwiftDeclaration` depends on, so it cannot name the event types itself
+    /// and takes a closure instead. This is where the closure is bound.
+    func opaqueTypeDegradationReporter(subject: String?) -> OpaqueTypeDegradationReporter {
+        let eventDispatcher = eventDispatcher
+        return { error in
+            eventDispatcher.dispatch(
+                .renderingDegraded(
+                    context: .init(source: .opaqueTypeRewrite, subject: subject),
+                    error: error
+                )
+            )
+        }
     }
 
     private func memberAddressString(forOffset offset: Int?) -> String? {
@@ -491,25 +781,56 @@ public final class SwiftDeclarationPrinter<MachO: FieldLayoutRenderable>: Sendab
     }
 }
 
-package func printCatchedThrowing(@SemanticStringBuilder _ body: () async throws -> SemanticString) async -> SemanticString? {
+/// Renders `body`, dropping only what it was rendering if it throws.
+///
+/// The failure is always reported, and always as an event — it must NOT be
+/// printed. `swift-section interface` / `dump` stream the generated Swift to
+/// stdout (`InterfaceCommand.swift:106`, `DumpCommand.swift:294`), so anything a
+/// library writes there lands inside the generated output and corrupts any piped
+/// or redirected interface. Issue #102 reported both halves of this from the
+/// field: a run that lost 8,375 definitions emitted **zero**
+/// `definitionPrintFailed` events, and its only signal was a bare
+/// `unexpected(at: 8)` on stdout, fully buffered and therefore surfacing far
+/// from its cause.
+///
+/// The dispatcher is required rather than optional. When it was optional, the
+/// callers that passed nothing fell to a stderr `else` branch — which is how a
+/// library ended up choosing where diagnostics go, and how the branch could
+/// raise on a closed stderr and abort the host. Where the failure has no
+/// definition identity (`context == nil`) it is reported as
+/// ``SwiftIndexEvents/DegradationSource`` instead; a dispatcher with no handlers
+/// still has `Dispatcher`'s own floor beneath it, so nothing lands nowhere.
+package func printCatchedThrowing(
+    isolation: isolated (any Actor)? = #isolation,
+    dispatchingTo eventDispatcher: SwiftIndexEvents.Dispatcher,
+    context: SwiftIndexEvents.PrintingContext? = nil,
+    degradationSource: SwiftIndexEvents.DegradationSource = .typeNodeRendering,
+    @SemanticStringBuilder _ body: () async throws -> SemanticString
+) async -> SemanticString? {
     do {
         return try await body()
     } catch {
-        print(error)
+        if let context {
+            eventDispatcher.dispatch(.definitionPrintFailed(context: context, error: error))
+        } else {
+            eventDispatcher.dispatch(
+                .renderingDegraded(context: .init(source: degradationSource), error: error)
+            )
+        }
         return nil
     }
 }
 
 extension SwiftDeclarationPrinter: NodePrintableDelegate {
     public func moduleName(forTypeName typeName: String) async -> String? {
-        await typeNameResolvers.asyncFirstNonNil { await $0.moduleName(forTypeName: typeName) }
+        await typeNameResolverRegistry.moduleNameResolvers.asyncFirstNonNil { await $0.moduleName(forTypeName: typeName) }
     }
 
-    public func swiftName(forCName cName: String) async -> String? {
-        await typeNameResolvers.asyncFirstNonNil { await $0.swiftName(forCName: cName) }
+    public func swiftName(forCName cName: String, category: CImportedTypeNameCategory) async -> String? {
+        await typeNameResolverRegistry.cImportedNameResolvers.asyncFirstNonNil { await $0.swiftName(forCName: cName, category: category) }
     }
 
     public func opaqueType(forNode node: Node, index: Int?) async -> String? {
-        await typeNameResolvers.asyncFirstNonNil { await $0.opaqueType(forNode: node, index: index) }
+        await typeNameResolverRegistry.opaqueTypeResolvers.asyncFirstNonNil { await $0.opaqueType(forNode: node, index: index) }
     }
 }

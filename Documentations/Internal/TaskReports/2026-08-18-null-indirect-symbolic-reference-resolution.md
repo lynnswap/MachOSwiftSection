@@ -151,4 +151,4 @@ gate 为 1359 tests / 253 suites 全绿。未运行 IntegrationTests、未改 ba
 ## 文档
 
 - [NullIndirectSymbolicReferenceResolution.md](../NullIndirectSymbolicReferenceResolution.md)
-- [0005 - 空间接符号引用的单一 witness 解析契约](../../Evolutions/0005-null-indirect-symbolic-reference-resolution.md)
+- [0005 - 空间接符号引用的单一 witness 解析契约](../../Evolutions/draft-null-indirect-symbolic-reference-resolution.md)

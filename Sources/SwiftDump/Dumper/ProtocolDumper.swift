@@ -5,6 +5,7 @@ import Semantic
 import Utilities
 import Demangling
 import OrderedCollections
+@_spi(Internals) import MachOSymbols
 @_spi(Internals) import SwiftInspection
 import SwiftDeclarationRendering
 
@@ -91,19 +92,19 @@ package struct ProtocolDumper<MachO: FieldLayoutRenderable>: NamedDumper {
 
             try await associatedTypes
 
-            var defaultImplementations: OrderedSet<Node> = []
+            var defaultImplementations: OrderedSet<StructuralNodeReferenceKey> = []
 
             for (offset, requirement) in dumped.requirements.offsetEnumerated() {
                 BreakLine()
                 Indent(level: configuration.indentation)
-                if let symbols = try await Symbols.resolve(from: requirement.offset, in: machO), let validNode = try await validNode(for: symbols) {
+                if let symbols = machO.symbols(offset: requirement.offset), let validNode = try await validNode(for: symbols) {
                     try await demangleResolver.resolve(for: validNode)
                 } else {
                     InlineComment("[Stripped Symbol]")
                 }
 
-                if let symbols = try requirement.defaultImplementationSymbols(in: machO), let defaultImplementation = try await validNode(for: symbols, visitedNode: defaultImplementations) {
-                    _ = defaultImplementations.append(defaultImplementation)
+                if let symbols = requirement.defaultImplementationSymbols(in: machO), let defaultImplementation = try await validNode(for: symbols, visitedNode: defaultImplementations) {
+                    _ = defaultImplementations.append(StructuralNodeReferenceKey(defaultImplementation))
                 }
 
                 if offset.isEnd {
@@ -120,7 +121,7 @@ package struct ProtocolDumper<MachO: FieldLayoutRenderable>: NamedDumper {
 
                 BreakLine()
                 Indent(level: configuration.indentation)
-                try await demangleResolver.resolve(for: defaultImplementation)
+                try await demangleResolver.resolve(for: defaultImplementation.reference)
 
                 if offset.isEnd {
                     BreakLine()
@@ -145,10 +146,21 @@ package struct ProtocolDumper<MachO: FieldLayoutRenderable>: NamedDumper {
         }
     }
 
-    private func validNode(for symbols: Symbols, visitedNode: borrowing OrderedSet<Node> = []) async throws -> Node? {
+    /// The first symbol among `symbols` mentioning THIS protocol and not yet
+    /// claimed.
+    ///
+    /// Deliberately NOT narrowed to the declaration-context match
+    /// `ClassDumper.validNode` uses. A protocol's symbols are not only members:
+    /// `base conformance descriptor for P: Q` and the other requirement
+    /// descriptors carry no entity node at all, so a context-based match drops
+    /// them outright (measured: 1033 lines of SwiftUICore's protocol output
+    /// degraded to `[Stripped Symbol]`). Protocol-side attribution needs its
+    /// own evidence model and is out of scope for the vtable-attribution
+    /// proposal — the folding ambiguity documented there applies here too.
+    private func validNode(for symbols: Symbols, visitedNode: borrowing OrderedSet<StructuralNodeReferenceKey> = []) async throws -> NodeReference? {
         let currentInterfaceName = try await _name(using: .options(.interfaceType)).string
         for symbol in symbols {
-            if let node = try? MetadataReader.demangleSymbol(for: symbol, in: machO), let protocolNode = node.first(of: .protocol), await protocolNode.print(using: .interfaceType) == currentInterfaceName, !visitedNode.contains(node) {
+            if let node = MetadataReader.demangleSymbolReference(for: symbol, in: machO), let protocolNode = node.first(of: .protocol), await protocolNode.print(using: .interfaceType) == currentInterfaceName, !visitedNode.contains(StructuralNodeReferenceKey(node)) {
                 return node
             }
         }

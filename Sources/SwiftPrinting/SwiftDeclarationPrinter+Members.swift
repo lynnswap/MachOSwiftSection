@@ -28,18 +28,43 @@ extension SwiftDeclarationPrinter {
     /// `var value: A`).
     @SemanticStringBuilder
     public func printField(_ field: FieldDefinition, level: Int, substitutedTypeNode: Node? = nil) async -> SemanticString {
-        await printCatchedThrowing {
+        // A stored field is reported as `.variable` — the event vocabulary has
+        // no separate field kind, and a stored property is what it renders as.
+        await printCatchedThrowing(
+            dispatchingTo: eventDispatcher,
+            context: .init(name: field.name, kind: .variable)
+        ) {
             try await printThrowingField(field, level: level, substitutedTypeNode: substitutedTypeNode)
         }
     }
 
     @SemanticStringBuilder
     func printThrowingField(_ field: FieldDefinition, level: Int, substitutedTypeNode: Node? = nil) async throws -> SemanticString {
+        if field.isFinal {
+            Keyword(.final)
+            Space()
+        }
         fieldDeclarationKeywords(for: field.flags)
         MemberDeclaration(field.name)
         Standard(":")
         Space()
-        try await printThrowingType(substitutedTypeNode ?? field.typeNode, isProtocol: false, level: level)
+        try await printThrowingType(fieldTypeNode(for: field, substitutedTypeNode: substitutedTypeNode), isProtocol: false, level: level)
+    }
+
+    /// The node the field's declared type renders from. A lazy field prefers
+    /// the getter's caller-facing type over the record's `Optional` storage
+    /// type (evolution proposal 0006); a specialized definition's substituted
+    /// node still wins, because it resolves generic parameters, which the
+    /// accessor symbol's node does not. When no getter symbol joined, the
+    /// storage type renders unchanged — the honest fallback.
+    private func fieldTypeNode(for field: FieldDefinition, substitutedTypeNode: Node?) -> Node {
+        if let substitutedTypeNode {
+            return substitutedTypeNode
+        }
+        if field.flags.contains(.isLazy), let accessorTypeNode = field.accessorTypeNode {
+            return accessorTypeNode.materialize()
+        }
+        return field.typeNode.materialize()
     }
 
     /// Renders a single enum case (`case name`, `case name(Payload)`, or
@@ -62,7 +87,7 @@ extension SwiftDeclarationPrinter {
             MemberDeclaration(field.name)
         }
 
-        let payloadTypeNode = substitutedTypeNode ?? field.typeNode
+        let payloadTypeNode = substitutedTypeNode ?? field.typeNode.materialize()
         let payload = await printType(payloadTypeNode, isProtocol: false, level: level)
         let payloadText = payload.string
         if !payloadText.isEmpty, payloadText != "()" {
@@ -105,7 +130,7 @@ extension SwiftDeclarationPrinter {
         MemberDeclaration(field.name)
 
         if field.flags.contains(.hasMangledTypeName) {
-            let payloadTypeNode = substitutedTypeNode ?? field.typeNode
+            let payloadTypeNode = substitutedTypeNode ?? field.typeNode.materialize()
             let payload = try await printThrowingType(payloadTypeNode, isProtocol: false, level: level)
             if !payload.string.isEmpty {
                 if payloadTypeNode.firstChild?.isKind(of: .tuple) ?? false {

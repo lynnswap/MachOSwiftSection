@@ -3,7 +3,7 @@ import FoundationToolbox
 import Semantic
 import MachOSwiftSection
 import MachOKit
-import Demangling
+@_spi(Internals) import Demangling
 @_spi(Internals) import SwiftInspection
 import SwiftDeclarationRendering
 
@@ -68,12 +68,21 @@ extension TypedDumper {
     /// permits `weak let` / `unowned let`, so the storage modifier composes with
     /// either mutability keyword. `lazy` is the single exception and always pairs
     /// with `var`.
+    ///
+    /// `isFinal` prefixes the recovered `final` keyword (evolution proposal
+    /// 0006); only `ClassDumper` passes it — value types have no dynamic
+    /// dispatch to be final against.
     @SemanticStringBuilder
     package func fieldDeclarationKeywords(
         for fieldRecord: FieldRecord,
         typeNode: Node,
-        fieldName: String
+        fieldName: String,
+        isFinal: Bool = false
     ) -> SemanticString {
+        if isFinal {
+            Keyword(.final)
+            Space()
+        }
         if typeNode.hasWeakNode {
             Keyword(.weak)
             Space()
@@ -225,7 +234,7 @@ extension TypedDumper {
         // so callers stay on the unbound representation.
         guard #available(macOS 11, iOS 14, tvOS 14, watchOS 7, *) else { return nil }
         guard let resolvedMangledString = _mangledTypeName(metatype) else { return nil }
-        return try? demangleAsNode(resolvedMangledString, isType: true)
+        return try? demangleAsNodeTransient(resolvedMangledString, isType: true)
     }
 
     /// Render the bound generic dumped name so that the type's qualified

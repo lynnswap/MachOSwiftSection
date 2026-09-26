@@ -74,9 +74,9 @@ extension Package.Dependency {
     }
 }
 
-let isSilentTest = envEnable("MACHO_SWIFT_SECTION_SILENT_TEST", default: false)
+let MachOKitVersion: Version = "0.46.1"
 
-let useSwiftTUI = envEnable("MACHO_SWIFT_SECTION_USE_SWIFTTUI", default: false)
+let isSilentTest = envEnable("MACHO_SWIFT_SECTION_SILENT_TEST", default: false)
 
 var testSettings: [SwiftSetting] = []
 
@@ -103,7 +103,12 @@ var dependencies: [Package.Dependency] = [
     .package(url: "https://github.com/gohanlon/swift-memberwise-init-macro", from: "0.6.0"),
 
     .package(url: "https://github.com/pointfreeco/swift-dependencies", from: "1.9.4"),
-    
+
+    // TypeIndexing (all its sources are `#if os(macOS)`; both products carry
+    // a macOS-only platform condition on the target dependency)
+    .package(url: "https://github.com/Mx-Iris/SourceKitD", from: "0.1.0"),
+    .package(url: "https://github.com/MxIris-DeveloperTool/swift-apinotes", from: "0.1.0"),
+
     // CLI
     .package(url: "https://github.com/onevcat/Rainbow", from: "4.0.0"),
 
@@ -118,14 +123,22 @@ extension Package.Dependency {
             isRelative: true,
         ),
         remote: .package(
-            // Keep the PrivateHeaderKit reader cohort on the same MachOKit revision.
             url: "https://github.com/lynnswap/MachOKit.git",
-            revision: "f6a4f85280733a0e77d33f11274e7a12052c7ce1",
+            revision: "8d451ca2e9d108f0a2024758b33b25e8faa2adbb",
         ),
     )
-}
 
-extension Package.Dependency {
+    static let MachOKitExtensions = Package.Dependency.package(
+        local: .package(
+            path: "../MachOKitExtensions",
+            isRelative: true,
+        ),
+        remote: .package(
+            url: "https://github.com/MxIris-Reverse-Engineering/MachOKitExtensions",
+            from: "0.1.1",
+        ),
+    )
+
     static let MachOObjCSection = Package.Dependency.package(
         local: .package(
             path: "../MachOObjCSection",
@@ -133,14 +146,7 @@ extension Package.Dependency {
         ),
         remote: .package(
             url: "https://github.com/lynnswap/MachOObjCSection.git",
-            // Keep the unreleased Objective-C metadata safety fixes on the same
-            // source identity as downstream packages that import both products.
-            // Mixing this dependency's upstream URL with a downstream fork URL
-            // makes SwiftPM diagnose a conflicting package identity. This
-            // untagged fork revision is a PrivateHeaderKit-only cohort; do not
-            // publish it as a general RuntimeViewer upgrade without co-pinning
-            // RuntimeViewer's direct MachOObjCSection dependency.
-            revision: "3ae07d5ec4725bd98590d5246eb550d8794a0b37",
+            revision: "5576f1e1f53ed88faf4e71c781246f7ec1cd1b24",
         ),
     )
 }
@@ -153,13 +159,7 @@ extension Package.Dependency {
         ),
         remote: .package(
             url: "https://github.com/MxIris-Reverse-Engineering/swift-demangling",
-            // Pinned below 0.5.0: that release reshaped `NodePrinterTarget`
-            // (`write(_:context:)` / `pushTypeReferenceScope(_:)` take
-            // `@autoclosure` parameters and lost their default implementations)
-            // and dropped `Node: Codable`. The adoption lives on
-            // feature/node-store-migration; until it lands, an open upper bound
-            // silently floats main onto an incompatible demangler.
-            "0.4.5" ..< "0.5.0",
+            "0.6.3" ..< "0.7.0",
         ),
     )
 
@@ -171,21 +171,6 @@ extension Package.Dependency {
         remote: .package(
             url: "https://github.com/MxIris-Reverse-Engineering/swift-semantic-string",
             from: "0.3.0",
-        ),
-    )
-
-    /// Extracted out of this package so that MachOObjCSection can use it too.
-    /// MachOSwiftSection depends on MachOObjCSection, so the ObjC side could
-    /// never depend back on an in-package `MachOKitExtensions` target without
-    /// forming a package-level cycle.
-    static let MachOKitExtensions = Package.Dependency.package(
-        local: .package(
-            path: "../MachOKitExtensions",
-            isRelative: true,
-        ),
-        remote: .package(
-            url: "https://github.com/MxIris-Reverse-Engineering/MachOKitExtensions",
-            from: "0.1.1",
         ),
     )
 }
@@ -281,6 +266,20 @@ extension Target {
         ],
     )
 
+    /// Dependency resolution shared by every feature that needs a binary's
+    /// linked images (evolution proposal macho-dependencies-module):
+    /// search paths, the in-process / on-disk locators, and the direct or
+    /// transitive `DependencyClosure` walk over `LC_LOAD_DYLIB`. Knows nothing
+    /// about Swift metadata, so it sits with the other MachO* leaf targets and
+    /// is re-exported by `MachOFoundation`.
+    static let MachODependencies = Target.target(
+        name: "MachODependencies",
+        dependencies: [
+            .product(.MachOKit),
+            .product(.MachOKitExtensions),
+        ],
+    )
+
     static let MachOReading = Target.target(
         name: "MachOReading",
         dependencies: [
@@ -316,20 +315,24 @@ extension Target {
         name: "MachOPointers",
         dependencies: [
             .product(.MachOKit),
+            .product(.MachOKitExtensions),
             .target(.MachOReading),
             .target(.MachOResolving),
             .target(.Utilities),
         ],
     )
 
-    static let MachOSymbolPointers = Target.target(
-        name: "MachOSymbolPointers",
+    /// The reader / resolver / pointer layer as one import: everything the
+    /// ABI model is allowed to depend on. `MachOFoundation` adds the symbol
+    /// index and dependency resolution on top (evolution proposal
+    /// `self-contained-abi-layer`).
+    static let MachOBase = Target.target(
+        name: "MachOBase",
         dependencies: [
-            .product(.MachOKit),
+            .product(.MachOKitExtensions),
             .target(.MachOReading),
             .target(.MachOResolving),
             .target(.MachOPointers),
-            .target(.MachOSymbols),
             .target(.Utilities),
         ],
     )
@@ -338,13 +341,9 @@ extension Target {
         name: "MachOFoundation",
         dependencies: [
             .product(.MachOKit),
-            .target(.MachOReading),
-            .product(.MachOKitExtensions),
-            .target(.MachOPointers),
+            .target(.MachOBase),
             .target(.MachOSymbols),
-            .target(.MachOResolving),
-            .target(.MachOSymbolPointers),
-            .target(.Utilities),
+            .target(.MachODependencies),
         ],
     )
 
@@ -352,14 +351,16 @@ extension Target {
         name: "MachOSwiftSectionC",
     )
 
+    /// The ABI model. Depends on the reader / resolver / pointer layer only:
+    /// no symbol index, no demangler (evolution proposal
+    /// `self-contained-abi-layer`).
     static let MachOSwiftSection = Target.target(
         name: "MachOSwiftSection",
         dependencies: [
             .product(.MachOKit),
-            .product(.Demangling),
-            .target(.MachOFoundation),
-            .target(.MachOSwiftSectionC),
+            .target(.MachOBase),
             .target(.Utilities),
+            .target(.MachOSwiftSectionC),
         ],
     )
 
@@ -393,6 +394,7 @@ extension Target {
             .target(.MachOSwiftSectionC),
             .target(.Utilities),
             .target(.SwiftOutputTransformer),
+            .target(.MachOFoundation),
         ],
     )
 
@@ -408,6 +410,8 @@ extension Target {
             .product(.MachOKit),
             .product(.MachOObjCSection),
             .product(.Demangling),
+            .target(.MachODependencies),
+            .target(.MachOFoundation),
             .target(.MachOSwiftSection),
             .target(.SwiftInspection),
             .target(.Utilities),
@@ -429,6 +433,8 @@ extension Target {
             .product(.Demangling),
             .product(name: "FoundationToolbox", package: "FrameworkToolbox"),
             .target(.MachOCaches),
+            .target(.MachODependencies),
+            .target(.MachOFoundation),
             .target(.MachOSwiftSection),
             .target(.Utilities),
             .target(.SwiftOutputTransformer),
@@ -448,6 +454,7 @@ extension Target {
             .target(.Utilities),
             .target(.SwiftInspection),
             .target(.SwiftDeclarationRendering),
+            .target(.MachOFoundation),
         ],
     )
 
@@ -462,10 +469,17 @@ extension Target {
             .product(.MachOObjCSection),
             .product(.Semantic),
             .product(.Demangling),
+            // `@Loggable` / `#log` for `SwiftIndexEvents.Dispatcher`'s
+            // zero-handler floor, same as every other logging site in the
+            // package. The macro also supplies the `#available` fallback to
+            // `os_log` that a bare `os.Logger` would need here — this package
+            // deploys to macOS 10.15, below `Logger`'s macOS 11.
+            .product(name: "FoundationToolbox", package: "FrameworkToolbox"),
             .target(.MachOSwiftSection),
             .target(.SwiftInspection),
             .target(.SwiftDeclarationRendering),
             .target(.Utilities),
+            .target(.MachOFoundation),
         ],
     )
 
@@ -483,6 +497,7 @@ extension Target {
             .target(.SwiftInspection),
             .target(.Utilities),
             .target(.SwiftDeclaration),
+            .target(.MachOFoundation),
         ],
     )
 
@@ -534,6 +549,7 @@ extension Target {
             .target(.Utilities),
             .target(.SwiftDeclaration),
             .target(.SwiftAttributeInference),
+            .target(.MachOFoundation),
         ],
     )
 
@@ -549,6 +565,7 @@ extension Target {
             .product(.MachOObjCSection),
             .product(.Semantic),
             .product(.Demangling),
+            .target(.MachOSymbols),
             .target(.MachOSwiftSection),
             .target(.SwiftInspection),
             .target(.Utilities),
@@ -566,6 +583,8 @@ extension Target {
             .product(.MachOObjCSection),
             .product(.Semantic),
             .product(.Demangling),
+            .target(.MachODependencies),
+            .target(.MachOFoundation),
             .target(.MachOSwiftSection),
             .target(.SwiftInspection),
             .target(.SwiftDeclarationRendering),
@@ -579,21 +598,23 @@ extension Target {
         ],
     )
 
-//    static let TypeIndexing = Target.target(
-//        name: "TypeIndexing",
-//        dependencies: [
-//            .target(.SwiftInterface),
-//            .target(.Utilities),
-//            .product(.SwiftSyntax),
-//            .product(.SwiftParser),
-//            .product(.SwiftSyntaxBuilder),
-//            .product(.MachOObjCSection),
-//            .product(name: "Clang", package: "swift-clang"),
-//            .product(name: "SourceKitD", package: "SourceKitD", condition: .when(platforms: [.macOS])),
-//            .product(name: "BinaryCodable", package: "BinaryCodable"),
-//            .product(name: "APINotes", package: "swift-apinotes", condition: .when(platforms: [.macOS])),
-//        ]
-//    )
+    /// Module-attribution index for `__C` types (evolution proposal 0009):
+    /// resolves `__C.NSString` to `Foundation.NSString` via SourceKit-generated
+    /// module interfaces (substructure, no SwiftSyntax), APINotes renames, and
+    /// a lazy ObjC-metadata index over the binary's dependencies. Every source
+    /// file is `#if os(macOS)`.
+    static let TypeIndexing = Target.target(
+        name: "TypeIndexing",
+        dependencies: [
+            .target(.SwiftInterface),
+            .product(.MachOKit),
+            .product(name: "ObjCIndexing", package: "MachOObjCSection"),
+            .product(name: "ObjCMetadataSource", package: "MachOObjCSection"),
+            .product(name: "FoundationToolbox", package: "FrameworkToolbox"),
+            .product(name: "SourceKitD", package: "SourceKitD", condition: .when(platforms: [.macOS])),
+            .product(name: "APINotes", package: "swift-apinotes", condition: .when(platforms: [.macOS])),
+        ],
+    )
 
     static let swift_section = Target.executableTarget(
         name: "swift-section",
@@ -605,8 +626,10 @@ extension Target {
             .target(.SwiftPrinting),
             .target(.SwiftDiffing),
             .target(.SwiftInterface),
+            .target(.TypeIndexing),
             .product(name: "Rainbow", package: "Rainbow"),
             .product(name: "ArgumentParser", package: "swift-argument-parser"),
+            .target(.MachOFoundation),
         ],
     )
 
@@ -716,6 +739,8 @@ extension Target {
             .target(.MachOSymbols),
             .target(.MachOTestingSupport),
             .target(.MachOFixtureSupport),
+            .product(.Demangling),
+            .target(.MachOResolving),
         ],
         swiftSettings: testSettings,
     )
@@ -727,6 +752,9 @@ extension Target {
             .target(.MachOTestingSupport),
             .target(.MachOFixtureSupport),
             .target(.SwiftDump),
+            .target(.SwiftInspection),
+            .target(.MachOFoundation),
+            .product(.Demangling),
         ],
         swiftSettings: testSettings,
     )
@@ -735,6 +763,19 @@ extension Target {
         name: "MachOCachesTests",
         dependencies: [
             .target(.MachOCaches),
+            .product(.MachOKitExtensions),
+        ],
+        swiftSettings: testSettings,
+    )
+
+    static let MachODependenciesTests = Target.testTarget(
+        name: "MachODependenciesTests",
+        dependencies: [
+            .target(.MachODependencies),
+            .target(.MachOTestingSupport),
+            .target(.MachOFixtureSupport),
+            .product(.MachOKit),
+            .product(.MachOKitExtensions),
         ],
         swiftSettings: testSettings,
     )
@@ -750,7 +791,6 @@ extension Target {
     static let SwiftInspectionTests = Target.testTarget(
         name: "SwiftInspectionTests",
         dependencies: [
-            .product(.MachOKit),
             .target(.MachOSwiftSection),
             .target(.MachOTestingSupport),
             .target(.MachOFixtureSupport),
@@ -769,6 +809,7 @@ extension Target {
             .target(.MachOTestingSupport),
             .target(.MachOFixtureSupport),
             .product(.Demangling),
+            .target(.MachOFoundation),
         ],
         swiftSettings: testSettings,
     )
@@ -783,19 +824,18 @@ extension Target {
             .product(.Semantic),
             .product(.Demangling),
             .product(name: "SnapshotTesting", package: "swift-snapshot-testing"),
+            .target(.MachOFoundation),
         ],
         swiftSettings: testSettings,
     )
 
-//    static let TypeIndexingTests = Target.testTarget(
-//        name: "TypeIndexingTests",
-//        dependencies: [
-//            .target(.TypeIndexing),
-//            .target(.MachOTestingSupport),
-//            .target(.MachOFixtureSupport),
-//        ],
-//        swiftSettings: testSettings
-//    )
+    static let TypeIndexingTests = Target.testTarget(
+        name: "TypeIndexingTests",
+        dependencies: [
+            .target(.TypeIndexing),
+        ],
+        swiftSettings: testSettings,
+    )
 
     static let SwiftInterfaceTests = Target.testTarget(
         name: "SwiftInterfaceTests",
@@ -805,9 +845,11 @@ extension Target {
             .target(.SwiftPrinting),
             .target(.SwiftSpecialization),
             .target(.SwiftInterface),
+            .product(.MachOKitExtensions),
             .target(.MachOTestingSupport),
             .target(.MachOFixtureSupport),
             .product(name: "SnapshotTesting", package: "swift-snapshot-testing"),
+            .target(.MachOFoundation),
         ],
         swiftSettings: testSettings,
     )
@@ -821,6 +863,7 @@ extension Target {
             .target(.SwiftDump),
             .target(.MachOTestingSupport),
             .target(.MachOFixtureSupport),
+            .target(.MachOFoundation),
         ],
         swiftSettings: testSettings,
     )
@@ -836,6 +879,7 @@ extension Target {
             .target(.MachOFixtureSupport),
             .product(.Semantic),
             .product(.Demangling),
+            .target(.MachOFoundation),
         ],
         swiftSettings: testSettings,
     )
@@ -848,6 +892,7 @@ extension Target {
             .target(.SwiftAttributeInference),
             .target(.MachOTestingSupport),
             .target(.MachOFixtureSupport),
+            .target(.MachOFoundation),
         ],
         swiftSettings: testSettings,
     )
@@ -857,6 +902,7 @@ extension Target {
         dependencies: [
             .target(.SwiftDeclaration),
             .target(.SwiftDiffing),
+            .target(.MachOFoundation),
         ],
         swiftSettings: testSettings,
     )
@@ -880,8 +926,10 @@ extension Target {
             .target(.SwiftIndexing),
             .target(.SwiftPrinting),
             .target(.SwiftAttributeInference),
+            .target(.SwiftInspection),
             .target(.MachOTestingSupport),
             .target(.MachOFixtureSupport),
+            .target(.MachOFoundation),
         ],
         swiftSettings: testSettings,
     )
@@ -895,6 +943,7 @@ extension Target {
             .target(.SwiftSpecialization),
             .target(.MachOTestingSupport),
             .target(.MachOFixtureSupport),
+            .target(.MachOFoundation),
         ],
         swiftSettings: testSettings,
     )
@@ -921,7 +970,6 @@ extension Target {
             .target(.MachOResolving),
             .target(.MachOSymbols),
             .target(.MachOPointers),
-            .target(.MachOSymbolPointers),
             .target(.MachOFoundation),
             .target(.MachOSwiftSection),
             .target(.SwiftInspection),
@@ -931,7 +979,7 @@ extension Target {
             .target(.SwiftPrinting),
             .target(.SwiftInterface),
             .target(.SwiftDiffing),
-//            .target(.TypeIndexing),
+            .target(.TypeIndexing),
             .target(.MachOTestingSupport),
             .target(.MachOFixtureSupport),
             .product(.MachOKit),
@@ -949,6 +997,13 @@ let package = Package(
     platforms: [.macOS(.v10_15), .iOS(.v13), .tvOS(.v13), .watchOS(.v6), .visionOS(.v1)],
     products: [
         .library(.MachOSwiftSection),
+        // The ABI model no longer re-exports the symbol index (evolution
+        // proposal `self-contained-abi-layer`), so a downstream target that
+        // uses `SymbolIndexStore` / `DemangledSymbol` / `DependencyClosure`
+        // depends on `MachOFoundation` (or the lower `MachOBase`) explicitly.
+        .library(.MachOBase),
+        .library(.MachOFoundation),
+        .library(.MachODependencies),
         .library(.SwiftOutputTransformer),
         .library(.SwiftInspection),
         .library(.SwiftLayout),
@@ -961,7 +1016,7 @@ let package = Package(
         .library(.SwiftPrinting),
         .library(.SwiftSpecialization),
         .library(.SwiftInterface),
-//        .library(.TypeIndexing),
+        .library(.TypeIndexing),
         .executable(.swift_section),
     ],
     dependencies: dependencies,
@@ -970,11 +1025,12 @@ let package = Package(
         .Utilities,
         .SwiftOutputTransformer,
         .MachOCaches,
+        .MachODependencies,
         .MachOReading,
         .MachOResolving,
         .MachOSymbols,
         .MachOPointers,
-        .MachOSymbolPointers,
+        .MachOBase,
         .MachOFoundation,
         .MachOSwiftSectionC,
         .MachOSwiftSection,
@@ -989,7 +1045,7 @@ let package = Package(
         .SwiftPrinting,
         .SwiftSpecialization,
         .SwiftInterface,
-//        .TypeIndexing,
+        .TypeIndexing,
         .MachOMacros,
         .MachOFixtureSupport,
         .MachOTestingSupport,
@@ -1003,14 +1059,15 @@ let package = Package(
         .RegenerateBaselinesPlugin,
 
         // Testing
-//        .MachOSymbolsTests,
+        .MachOSymbolsTests,
         .MachOSwiftSectionTests,
         .MachOCachesTests,
+        .MachODependenciesTests,
         .SwiftInspectionTests,
         .SwiftOutputTransformerTests,
         .SwiftLayoutTests,
         .SwiftDumpTests,
-//        .TypeIndexingTests,
+        .TypeIndexingTests,
         .SwiftPrintingTests,
         .SwiftDeclarationRenderingTests,
         .SwiftAttributeInferenceTests,

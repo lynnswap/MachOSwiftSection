@@ -135,6 +135,10 @@ public struct OSLogEventHandler: SwiftIndexEvents.Handler {
         case .definitionPrintFailed(let context, let error):
             logger.error("Failed to print \(context.kind.description) '\(context.name)': \(String(describing: error))")
 
+        case .renderingDegraded(let context, let error):
+            let subject = context.subject.map { " for \($0)" } ?? ""
+            logger.error("Degraded \(context.source.description)\(subject): \(String(describing: error))")
+
         case .symbolIndexProgress(let currentCount, let totalCount):
             logger.trace("Symbol index progress: \(currentCount)/\(totalCount)")
         }
@@ -182,49 +186,93 @@ public struct OSLogEventHandler: SwiftIndexEvents.Handler {
     }
 }
 
-/// A simple event handler that prints summary information to the console.
+/// A simple event handler that reports summary information to the console.
+///
+/// This is the handler a CLI host attaches: it puts diagnostics on **stderr**,
+/// where an operator's terminal, `2>` redirect and CI log all pick them up —
+/// the reason `SwiftIndexEvents.Dispatcher`'s own floor (os_log) is only a
+/// floor. Issue #102 reported the CI case directly.
 public struct ConsoleEventHandler: SwiftIndexEvents.Handler {
-    public init() {}
+    /// An input label (`old` / `new`, a version label, a file name) printed
+    /// after the timestamp on every line. Set it when several inputs report
+    /// at once — `diff` and `evolution` index their inputs concurrently
+    /// (evolution proposal `large-stack-executor-and-cross-version-parallelism`),
+    /// so an unlabeled line cannot be attributed to an input.
+    public let label: String?
+
+    public init(label: String? = nil) {
+        self.label = label
+    }
 
     public func handle(event: SwiftIndexEvents.Payload) {
         let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
+        if let line = line(for: event, timestamp: timestamp) {
+            report(line)
+        }
+    }
+
+    /// The line `handle(event:)` writes for `event`, or `nil` for an event the
+    /// console does not report. `[timestamp] [label] [LEVEL] message`; the
+    /// label bracket is absent when there is no label.
+    package func line(for event: SwiftIndexEvents.Payload, timestamp: String) -> String? {
+        let prefix = "[\(timestamp)]" + (label.map { " [\($0)]" } ?? "")
 
         switch event {
         case .extractionCompleted(let result):
-            print("[\(timestamp)] [INFO] Extracted \(result.count) \(sectionName(result.section))")
+            return "\(prefix) [INFO] Extracted \(result.count) \(sectionName(result.section))"
 
         case .typeIndexingCompleted(let result):
-            print("[\(timestamp)] [INFO] Types: \(result.successful) successful, \(result.failed) failed, \(result.cImportedSkipped) C-imported skipped, \(result.nestedTypes) nested, \(result.extensionTypes) in extensions")
+            return "\(prefix) [INFO] Types: \(result.successful) successful, \(result.failed) failed, \(result.cImportedSkipped) C-imported skipped, \(result.nestedTypes) nested, \(result.extensionTypes) in extensions"
 
         case .protocolIndexingCompleted(let result):
-            print("[\(timestamp)] [INFO] Protocols: \(result.successful) successful, \(result.failed) failed")
+            return "\(prefix) [INFO] Protocols: \(result.successful) successful, \(result.failed) failed"
 
         case .conformanceIndexingCompleted(let result):
-            print("[\(timestamp)] [INFO] Conformances: \(result.extensionCount) extensions, \(result.failedConformances + result.failedAssociatedTypes + result.failedExtensions) failed")
+            return "\(prefix) [INFO] Conformances: \(result.extensionCount) extensions, \(result.failedConformances + result.failedAssociatedTypes + result.failedExtensions) failed"
 
         case .extensionIndexingCompleted(let result):
-            print("[\(timestamp)] [INFO] Extensions: \(result.typeExtensions) type, \(result.protocolExtensions) protocol, \(result.typeAliasExtensions) typealias, \(result.failed) failed")
+            return "\(prefix) [INFO] Extensions: \(result.typeExtensions) type, \(result.protocolExtensions) protocol, \(result.typeAliasExtensions) typealias, \(result.failed) failed"
 
         case .moduleCollectionCompleted(let result):
-            print("[\(timestamp)] [INFO] Found \(result.moduleCount) modules to import")
+            return "\(prefix) [INFO] Found \(result.moduleCount) modules to import"
 
         case .phaseTransition(let phase, let state):
             let phaseName = phaseName(phase)
             switch state {
             case .completed:
-                print("[\(timestamp)] [SUCCESS] \(phaseName.capitalized) completed")
+                return "\(prefix) [SUCCESS] \(phaseName.capitalized) completed"
             case .failed(let error):
-                print("[\(timestamp)] [ERROR] \(phaseName.capitalized) failed: \(String(describing: error))")
+                return "\(prefix) [ERROR] \(phaseName.capitalized) failed: \(String(describing: error))"
             case .started:
-                break // Ignore started events for console output
+                return nil // Ignore started events for console output
             }
 
         case .definitionPrintFailed(let context, let error):
-            print("[\(timestamp)] [ERROR] Failed to print \(context.kind.description) '\(context.name)': \(String(describing: error))")
+            return "\(prefix) [ERROR] Failed to print \(context.kind.description) '\(context.name)': \(String(describing: error))"
+
+        case .renderingDegraded(let context, let error):
+            let subject = context.subject.map { " for \($0)" } ?? ""
+            return "\(prefix) [ERROR] Degraded \(context.source)\(subject): \(String(describing: error))"
 
         default:
-            break // Ignore other detailed events
+            return nil // Ignore other detailed events
         }
+    }
+
+    /// The single write site, on stderr.
+    ///
+    /// stdout carries the generated Swift / JSON (`InterfaceCommand`,
+    /// `DumpCommand`, `SnapshotCommand`), so a diagnostic printed there lands
+    /// inside the product output and corrupts any piped or redirected run —
+    /// issue #102 measured exactly that, a bare `unexpected(at: 8)` embedded in
+    /// a multi-megabyte interface.
+    ///
+    /// `fputs`, not `FileHandle.standardError.write(_:)`: that overload is the
+    /// Objective-C bridge and raises `NSFileHandleOperationException` when the
+    /// stream is closed or broken. Swift cannot catch an ObjC exception, so it
+    /// aborts the host process — turning a degradation report into a crash.
+    private func report(_ message: String) {
+        fputs(message + "\n", stderr)
     }
 
     private func phaseName(_ phase: SwiftIndexEvents.Phase) -> String {

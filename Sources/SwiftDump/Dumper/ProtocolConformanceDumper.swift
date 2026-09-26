@@ -5,6 +5,7 @@ import Semantic
 import Demangling
 import Utilities
 import OrderedCollections
+@_spi(Internals) import MachOSymbols
 @_spi(Internals) import SwiftInspection
 import SwiftDeclarationRendering
 
@@ -47,8 +48,12 @@ package struct ProtocolConformanceDumper<MachO: FieldLayoutRenderable>: Conforme
                 Space()
             }
 
-            for conditionalRequirement in dumped.conditionalRequirements {
+            for (offset, conditionalRequirement) in dumped.conditionalRequirements.offsetEnumerated() {
                 try await conditionalRequirement.dump(resolver: demangleResolver, in: machO)
+                if !offset.isEnd {
+                    Standard(",")
+                    Space()
+                }
             }
         }
     }
@@ -92,46 +97,51 @@ package struct ProtocolConformanceDumper<MachO: FieldLayoutRenderable>: Conforme
                 Space()
                 Standard("{")
 
-                var visitedNodes: OrderedSet<Node> = []
+                var visitedNodes: OrderedSet<StructuralNodeReferenceKey> = []
 
                 for resilientWitness in dumped.resilientWitnesses {
                     BreakLine()
 
-                    if configuration.printMemberAddress {
-                        configuration.memberAddressComment(offset: resilientWitness.implementationOffset, addressString: resilientWitness.implementationAddress(in: machO))
+                    if configuration.printMemberAddress, let implementationOffset = resilientWitness.implementationOffset, let implementationAddressString = resilientWitness.implementationAddress(in: machO) {
+                        configuration.memberAddressComment(offset: implementationOffset, addressString: implementationAddressString)
                     }
                     
                     Indent(level: 1)
 
-                    if let symbols = try resilientWitness.implementationSymbols(in: machO), let node = Self.demangledSymbol(for: symbols, typeName: typeNameString, visitedNodes: visitedNodes, in: machO)?.demangledNode {
-                        _ = visitedNodes.append(node)
+                    if let symbols = resilientWitness.implementationSymbols(in: machO), let node = Self.demangledSymbol(for: symbols, typeName: typeNameString, visitedNodes: visitedNodes, in: machO)?.demangledNode {
+                        _ = visitedNodes.append(StructuralNodeReferenceKey(node))
                         try await demangleResolver.resolve(for: node)
                     } else if let requirement = try resilientWitness.requirement(in: machO) {
 
                         switch requirement {
                         case .symbol(let symbol):
-                            try await MetadataReader.demangleSymbol(for: symbol, in: machO).asyncMap { try await demangleResolver.resolve(for: $0) }
+                            try await MetadataReader.demangleSymbolReference(for: symbol, in: machO).asyncMap { try await demangleResolver.resolve(for: $0) }
                         case .element(let element):
-                            if let symbols = try await Symbols.resolve(from: element.offset, in: machO), let node = Self.demangledSymbol(for: symbols, typeName: typeNameString, visitedNodes: visitedNodes, in: machO)?.demangledNode {
-                                _ = visitedNodes.append(node)
+                            if let symbols = machO.symbols(offset: element.offset), let node = Self.demangledSymbol(for: symbols, typeName: typeNameString, visitedNodes: visitedNodes, in: machO)?.demangledNode {
+                                _ = visitedNodes.append(StructuralNodeReferenceKey(node))
                                 try await demangleResolver.resolve(for: node)
-                            } else if let defaultImplementationSymbols = try element.defaultImplementationSymbols(in: machO), let node = Self.demangledSymbol(for: defaultImplementationSymbols, typeName: typeNameString, visitedNodes: visitedNodes, in: machO)?.demangledNode {
-                                _ = visitedNodes.append(node)
+                            } else if let defaultImplementationSymbols = element.defaultImplementationSymbols(in: machO), let node = Self.demangledSymbol(for: defaultImplementationSymbols, typeName: typeNameString, visitedNodes: visitedNodes, in: machO)?.demangledNode {
+                                _ = visitedNodes.append(StructuralNodeReferenceKey(node))
+                                // Qualifies the address comment above
+                                // (evolution proposal 0007): this witness
+                                // resolved to a protocol-extension DEFAULT
+                                // implementation, not code on the conforming
+                                // type.
+                                if configuration.printMemberAddress {
+                                    InlineComment("protocol-extension default")
+                                    Space()
+                                }
                                 try await demangleResolver.resolve(for: node)
-                            } else if !element.defaultImplementation.isNull {
-                                FunctionDeclaration(machO.addressString(forOffset: element.defaultImplementation.resolveDirectOffset(from: element.offset(of: \.defaultImplementation))).insertSubFunctionPrefix)
-                            } else if !resilientWitness.implementation.isNull {
-//                                do {
-//                                try demangleResolver.resolve(for: MetadataReader.demangle(for: MangledName.resolve(from: resilientWitness.implementation.resolveDirectOffset(from: resilientWitness.offset(of: \.implementation)) - 1, in: machO), in: machO))
-//                                } catch {
-                                FunctionDeclaration(machO.addressString(forOffset: resilientWitness.implementation.resolveDirectOffset(from: resilientWitness.offset(of: \.implementation))).insertSubFunctionPrefix)
-//                                }
+                            } else if let defaultImplementationOffset = element.defaultImplementationOffset {
+                                FunctionDeclaration(machO.addressString(forOffset: defaultImplementationOffset).insertSubFunctionPrefix)
+                            } else if let implementationOffset = resilientWitness.implementationOffset {
+                                FunctionDeclaration(machO.addressString(forOffset: implementationOffset).insertSubFunctionPrefix)
                             } else {
                                 Error("Symbol not found")
                             }
                         }
-                    } else if !resilientWitness.implementation.isNull {
-                        FunctionDeclaration(machO.addressString(forOffset: resilientWitness.implementation.resolveDirectOffset(from: resilientWitness.offset(of: \.implementation))).insertSubFunctionPrefix)
+                    } else if let implementationOffset = resilientWitness.implementationOffset {
+                        FunctionDeclaration(machO.addressString(forOffset: implementationOffset).insertSubFunctionPrefix)
                     } else {
                         Error("Symbol not found")
                     }
@@ -171,18 +181,18 @@ package struct ProtocolConformanceDumper<MachO: FieldLayoutRenderable>: Conforme
     }
 
     private func _requirementName(for requirement: ProtocolRequirement) async throws -> String? {
-        guard let symbols = try await Symbols.resolve(from: requirement.offset, in: machO) else { return nil }
+        guard let symbols = machO.symbols(offset: requirement.offset) else { return nil }
         for symbol in symbols {
-            if let node = try? MetadataReader.demangleSymbol(for: symbol, in: machO) {
+            if let node = MetadataReader.demangleSymbolReference(for: symbol, in: machO) {
                 return await node.print(using: typeNameOptions)
             }
         }
         return nil
     }
     
-    package static func demangledSymbol(for symbols: Symbols, typeName: String, visitedNodes: borrowing OrderedSet<Node> = [], in machO: MachO) -> DemangledSymbol? {
+    package static func demangledSymbol(for symbols: Symbols, typeName: String, visitedNodes: borrowing OrderedSet<StructuralNodeReferenceKey> = [], in machO: MachO) -> DemangledSymbol? {
         for symbol in symbols {
-            if let node = try? MetadataReader.demangleSymbol(for: symbol, in: machO), let targetNode = node.first(of: .protocolConformance), let symbolTypeName = targetNode.children.at(0)?.print(using: .interfaceType), symbolTypeName == typeName || PrimitiveTypeMappingCache.shared.storage(in: machO)?.primitiveType(for: typeName) == symbolTypeName, !visitedNodes.contains(node) {
+            if let node = MetadataReader.demangleSymbolReference(for: symbol, in: machO), let targetNode = node.first(of: .protocolConformance), let symbolTypeName = targetNode.children.at(0)?.print(using: .interfaceType), symbolTypeName == typeName || PrimitiveTypeMappingCache.shared.storage(in: machO)?.primitiveType(for: typeName) == symbolTypeName, !visitedNodes.contains(StructuralNodeReferenceKey(node)) {
                 return .init(symbol: symbol, demangledNode: node)
             }
         }

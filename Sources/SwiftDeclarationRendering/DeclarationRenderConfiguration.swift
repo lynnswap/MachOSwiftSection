@@ -63,6 +63,12 @@ public struct DeclarationRenderConfiguration: Sendable {
     public var printVTableOffset: Bool = false
     public var printExpandedFieldOffsets: Bool = false
     public var printConformancePWTAddress: Bool = false
+
+    /// Emit a `// not exported` comment on member-symbol lines whose symbol
+    /// has no export-trie entry (evolution proposal 0008). A symbol-table
+    /// FACT, not an access-level guess; nothing is emitted when the image
+    /// carries no export information.
+    public var printExportStatus: Bool = false
     public var memberAddressTransformer: MemberAddressTransformer? = nil
     public var vtableOffsetTransformer: VTableOffsetTransformer? = nil
     public var fieldOffsetTransformer: FieldOffsetTransformer? = nil
@@ -107,6 +113,18 @@ extension DeclarationRenderConfiguration {
         } else {
             Comment("Address: 0x\(addressString)")
         }
+        BreakLine()
+    }
+
+    /// Builds a `not exported` comment line (evolution proposal 0008),
+    /// emitted by the dumpers next to a member-symbol line whose symbol
+    /// provably has no export-trie entry.
+    ///
+    /// The returned ``SemanticString`` includes indentation and a trailing line break.
+    @SemanticStringBuilder
+    package func exportStatusComment() -> SemanticString {
+        indentString
+        Comment("not exported")
         BreakLine()
     }
 
@@ -176,6 +194,34 @@ extension DeclarationRenderConfiguration {
         } else {
             Comment("VTable offset: \(slotOffset)")
         }
+        BreakLine()
+    }
+
+    /// Builds the comment marking a vtable slot whose implementation pointer is
+    /// null.
+    ///
+    /// The member was deleted while the slot stayed behind for ABI stability;
+    /// the class metadata binds such a slot to `swift_deletedMethodError`, so
+    /// calling it traps. The declaration that follows (recovered from the
+    /// descriptor's `Tq` symbol, when the image has one) names what USED to be
+    /// here — without this line it would read as an ordinary member.
+    @SemanticStringBuilder
+    package func deletedMethodSlotComment() -> SemanticString {
+        indentString
+        Comment("No implementation in this image (deleted method — slot retained for ABI)")
+        BreakLine()
+    }
+
+    /// Builds the comment marking a vtable slot whose member could not be
+    /// proven.
+    ///
+    /// The descriptor carries no `Tq` symbol and its implementation address is
+    /// shared by identical-code-folded siblings, so the name that follows is
+    /// the best available candidate rather than an established fact.
+    @SemanticStringBuilder
+    package func ambiguousAttributionComment(foldedSymbolCount: Int) -> SemanticString {
+        indentString
+        Comment("Attribution: ambiguous — \(foldedSymbolCount) symbols folded at this address")
         BreakLine()
     }
 

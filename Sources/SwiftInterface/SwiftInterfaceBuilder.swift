@@ -1,3 +1,4 @@
+import Foundation
 import SwiftDeclaration
 @_spi(Support) import SwiftIndexing
 @_spi(Support) import SwiftPrinting
@@ -40,7 +41,11 @@ public final class SwiftInterfaceBuilder<MachO: FieldLayoutRenderable>: Sendable
     private let eventDispatcher: SwiftIndexEvents.Dispatcher
 
     private var allExtensionDefinitions: [ExtensionDefinition] {
+        // Attached definitions render trailing their protocol declaration
+        // (evolution proposal 0007) — repeating them here was the duplicate
+        // `extension P` block issue #106 §5 reported.
         (indexer.typeExtensionDefinitions.values.flatMap { $0 } + indexer.protocolExtensionDefinitions.values.flatMap { $0 } + indexer.typeAliasExtensionDefinitions.values.flatMap { $0 } + indexer.conformanceExtensionDefinitions.values.flatMap { $0 })
+            .filter { !$0.isAttachedToProtocolDefinition }
     }
 
     /// Creates a new Swift interface builder for the given Mach-O binary.
@@ -71,7 +76,9 @@ public final class SwiftInterfaceBuilder<MachO: FieldLayoutRenderable>: Sendable
     
     public func addExtraDataProvider(_ extraDataProvider: some SwiftInterfaceBuilderExtraDataProvider) {
         extraDataProviders.append(extraDataProvider)
-        printer.addTypeNameResolver(extraDataProvider)
+        if let typeNameResolver = extraDataProvider as? any TypeNameResolving {
+            printer.addTypeNameResolver(typeNameResolver)
+        }
     }
 
     public func removeAllExtraDataProviders() {
@@ -87,15 +94,30 @@ public final class SwiftInterfaceBuilder<MachO: FieldLayoutRenderable>: Sendable
     /// - Building cross-reference maps for conformances and associated types
     /// - Collecting all required module imports
     ///
+    /// Runs on the demangler's large-stack task executor
+    /// (`LargeStackTaskExecution.run`, evolution proposal
+    /// `large-stack-executor-and-cross-version-parallelism`), as does
+    /// `printRoot()`: every demangle / print / remangle inside runs inline
+    /// instead of hopping to a pool thread per call. Output is independent
+    /// of where it runs.
+    ///
     /// - Throws: An error if indexing fails or if required data cannot be extracted.
     public func prepare() async throws {
+        try await LargeStackTaskExecution.run {
+            try await prepareContents()
+        }
+    }
+
+    private func prepareContents() async throws {
         eventDispatcher.dispatch(.phaseTransition(phase: .preparation, state: .started))
 
         for extraDataProvider in extraDataProviders {
             do {
                 try await extraDataProvider.setup()
             } catch {
-                print(error)
+                eventDispatcher.dispatch(
+                    .renderingDegraded(context: .init(source: .extraDataProvider), error: error)
+                )
             }
         }
 
@@ -116,70 +138,128 @@ public final class SwiftInterfaceBuilder<MachO: FieldLayoutRenderable>: Sendable
         eventDispatcher.dispatch(.phaseTransition(phase: .preparation, state: .completed))
     }
 
-    @SemanticStringBuilder
     public func printRoot() async throws -> SemanticString {
+        // Exported-only filter (evolution proposal
+        // `exported-only-interface`): the printer rules on types,
+        // protocols and members by itself, but an `extension`'s verdict needs
+        // the indexer's complete in-image tables — a stripped image carries no
+        // symbol for a non-exported type, so only the index can say whether an
+        // extension's target is a dropped in-image declaration. Installed per
+        // print so a configuration update between prints is honored.
+        if printer.configuration.printExportedDeclarationsOnly {
+            printer.installExportFilterScope(types: indexer.allTypeDefinitions.values, protocols: indexer.allProtocolDefinitions.values)
+        }
+        return try await LargeStackTaskExecution.run {
+            try await printRootContents()
+        }
+    }
+
+    @SemanticStringBuilder
+    private func printRootContents() async throws -> SemanticString {
+        // Leading header (evolution proposal 0008), deliberately independent
+        // of the imports block below — flag-gated, default absent.
+        if let interfaceHeaderInfo = configuration.interfaceHeaderInfo {
+            InterfaceHeaderBlock(interfaceHeaderInfo)
+        }
+
         ImportsBlock(OrderedSet(Self.internalModules + importedModules).sorted())
 
-        await printCatchedThrowing {
+        // The two globals blocks carry no printing context because they cannot
+        // fail as a block: `printVariable` / `printFunction` are non-throwing —
+        // each already catches per member and dispatches its own
+        // `definitionPrintFailed`. These wrappers are belt-and-braces, so there
+        // is no definition identity to attribute a block-level failure to, and
+        // they report as `.definitionBlock` degradations instead.
+        await printCatchedThrowing(dispatchingTo: eventDispatcher, degradationSource: .definitionBlock) {
             await BlockList {
-                for variable in indexer.globalVariableDefinitions {
+                for variable in indexer.globalVariableDefinitions where !printer.isExcludedByExportFilter(globalSymbolNames: variable.accessors.map(\.symbol.name)) {
+                    printer.globalExportStatusComment(forSymbolNames: variable.accessors.map(\.symbol.name))
                     await printer.printVariable(variable, level: 0)
                 }
             }
         }
 
-        await printCatchedThrowing {
+        await printCatchedThrowing(dispatchingTo: eventDispatcher, degradationSource: .definitionBlock) {
             await BlockList {
-                for function in indexer.globalFunctionDefinitions {
+                for function in indexer.globalFunctionDefinitions where !printer.isExcludedByExportFilter(globalSymbolNames: [function.symbol.name]) {
+                    printer.globalExportStatusComment(forSymbolNames: [function.symbol.name])
                     await printer.printFunction(function, level: 0)
                 }
             }
         }
 
-        await printCatchedThrowing {
-            try await BlockList {
-                for typeDefinition in indexer.rootTypeDefinitions.values {
+        // Each definition is caught individually: one definition whose
+        // printing throws (e.g. an unresolvable reference in a legacy or
+        // damaged binary) drops only itself, never the whole block. A
+        // block-level catch used to blank every type of the interface the
+        // moment a single one threw.
+        await BlockList {
+            for typeDefinition in indexer.rootTypeDefinitions.values {
+                await printCatchedThrowing(
+                    dispatchingTo: eventDispatcher,
+                    context: .init(name: typeDefinition.typeName.name, kind: .type)
+                ) {
                     try await printer.printTypeDefinition(typeDefinition)
                 }
             }
         }
 
-        await printCatchedThrowing {
-            try await BlockList {
-                // Specialized variants live on each `TypeDefinition` rather
-                // than on the indexer (the indexer is intentionally agnostic
-                // of user-driven specialization). Walk every type definition
-                // in the module and surface any specialized children it has
-                // accumulated through `specialize(with:in:)`.
-                for typeDefinition in indexer.allTypeDefinitions.values {
-                    for specialized in typeDefinition.specializedChildren {
+        await BlockList {
+            // Specialized variants live on each `TypeDefinition` rather
+            // than on the indexer (the indexer is intentionally agnostic
+            // of user-driven specialization). Walk every type definition
+            // in the module and surface any specialized children it has
+            // accumulated through `specialize(with:in:)`.
+            for typeDefinition in indexer.allTypeDefinitions.values {
+                for specialized in typeDefinition.specializedChildren {
+                    await printCatchedThrowing(
+                        dispatchingTo: eventDispatcher,
+                        context: .init(name: specialized.typeName.name, kind: .type)
+                    ) {
                         try await printer.printTypeDefinition(specialized)
                     }
                 }
             }
         }
 
-        await printCatchedThrowing {
-            try await BlockList {
-                for protocolDefinition in indexer.rootProtocolDefinitions.values {
+        await BlockList {
+            for protocolDefinition in indexer.rootProtocolDefinitions.values {
+                await printCatchedThrowing(
+                    dispatchingTo: eventDispatcher,
+                    context: .init(name: protocolDefinition.protocolName.name, kind: .protocol)
+                ) {
                     try await printer.printProtocolDefinition(protocolDefinition)
                 }
             }
         }
 
-        await printCatchedThrowing {
-            try await BlockList {
-                for protocolDefinition in indexer.rootProtocolDefinitions.values.filterNonNil(\.parent) {
-                    for extensionDefinition in protocolDefinition.defaultImplementationExtensions {
+        await BlockList {
+            // NESTED protocols' default-implementation / protocol-extension
+            // blocks: the per-protocol printer emits them trailing TOP-LEVEL
+            // protocol declarations only (extension blocks cannot nest inside
+            // a parent's body), so nested protocols' blocks surface here at
+            // the top level instead. This loop was dead before evolution
+            // proposal 0007 — it filtered ROOT protocols on `parent != nil`,
+            // which no root ever satisfies, so nested protocols' blocks never
+            // printed at all.
+            for protocolDefinition in indexer.allProtocolDefinitions.values where protocolDefinition.parent != nil {
+                for extensionDefinition in protocolDefinition.defaultImplementationExtensions {
+                    await printCatchedThrowing(
+                        dispatchingTo: eventDispatcher,
+                        context: .init(name: extensionDefinition.extensionName.name, kind: .extension)
+                    ) {
                         try await printer.printExtensionDefinition(extensionDefinition)
                     }
                 }
             }
         }
 
-        await printCatchedThrowing {
-            try await BlockList {
-                for extensionDefinition in allExtensionDefinitions {
+        await BlockList {
+            for extensionDefinition in allExtensionDefinitions {
+                await printCatchedThrowing(
+                    dispatchingTo: eventDispatcher,
+                    context: .init(name: extensionDefinition.extensionName.name, kind: .extension)
+                ) {
                     try await printer.printExtensionDefinition(extensionDefinition)
                 }
             }
