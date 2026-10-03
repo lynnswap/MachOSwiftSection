@@ -29,3 +29,5 @@
 | [0019](0019-large-stack-executor-and-cross-version-parallelism.md) | 大栈任务执行器接入与跨版本并行准备：打印路径零线程跳转（执行器本体在 swift-demangling 0014），diff / evolution 多版本并行 | Implemented |
 | [0020](0020-vtable-slot-attribution-via-method-descriptor-symbols.md) | vtable 槽归属改用 method descriptor 符号：ICF 折叠下的错名修正与墓碑槽还原 | Implemented |
 | [0021](0021-null-indirect-symbolic-reference-resolution.md) | 空间接符号引用的单一 witness 解析契约 | Implemented |
+
+| [draft](draft-demand-driven-accessor-resolution.md) | 按布局需求解析 metadata accessor | Implemented |

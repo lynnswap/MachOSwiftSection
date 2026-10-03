@@ -10,6 +10,7 @@ Documentation is split by audience.
 > not the library itself.
 > Evolution proposals live in [`Evolutions/`](Evolutions/README.md) (status table + numbering there); the first one is [0001-symbol-name-offsetization.md](Evolutions/0001-symbol-name-offsetization.md).
 > Proposals [0006](Evolutions/0006-final-keyword-and-lazy-accessor-type-recovery.md)–[0008](Evolutions/0008-interface-header-and-export-status-annotations.md) are the issue #106 interface-fidelity batches (`final` keyword + lazy accessor type, extension container dedup, interface header + export-status annotations).
+> [Demand-driven accessor resolution](Evolutions/draft-demand-driven-accessor-resolution.md) records the approved static-declaration/runtime-layout boundary.
 > Project-specific terminology lives in [`Glossary.md`](Glossary.md) (Chinese; register new terms in the same batch that introduces them — cross-project terms stay in the global glossary).
 
 ## External — for library users / other developers
