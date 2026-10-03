@@ -115,30 +115,35 @@ package struct FieldLayoutRenderer<MachO: FieldLayoutRenderable> {
     ///     to read field offsets / drive substitution from.
     ///   - autoResolveAccessorMetadata: when `true` and no metadata is supplied,
     ///     a *non-generic* type's runtime metadata is resolved through its
-    ///     accessor function (only succeeds in-process / for MachOImage) — this
-    ///     mirrors `TypeContextWrapper.dumper(using:metadata:in:)` and is what
-    ///     the model-driven printer wants. When `false` (the raw-descriptor dump
-    ///     path), a `nil` metadata stays `nil` so the bare dumper keeps its "no
-    ///     metadata context ⇒ no offsets" contract.
+    ///     accessor function when field offsets or that enum's layout are
+    ///     requested (only succeeds in-process / for MachOImage). Rendering
+    ///     declarations alone does not execute the type's runtime code.
+    ///     When `false` (the raw-descriptor dump path), a `nil` metadata stays
+    ///     `nil`, preserving the bare dumper's requirement for a caller-supplied
+    ///     metadata context when rendering runtime field offsets.
     package init(type: TypeContextWrapper, metadata providedMetadata: MetadataWrapper?, machO: MachO, configuration: DeclarationRenderConfiguration, autoResolveAccessorMetadata: Bool = true) {
         self.type = type
         self.machO = machO
         self.configuration = configuration
 
         let isGeneric: Bool
+        let needsAccessorMetadata: Bool
         switch type {
         case .struct(let structType):
             isGeneric = structType.descriptor.isGeneric
+            needsAccessorMetadata = configuration.printFieldOffset
         case .enum(let enumType):
             isGeneric = enumType.descriptor.isGeneric
+            needsAccessorMetadata = configuration.printEnumLayout
         case .class(let classType):
             isGeneric = classType.descriptor.isGeneric
+            needsAccessorMetadata = configuration.printFieldOffset
         }
         self.isGeneric = isGeneric
 
         if let providedMetadata {
             self.metadata = providedMetadata
-        } else if isGeneric || !autoResolveAccessorMetadata {
+        } else if isGeneric || !autoResolveAccessorMetadata || !needsAccessorMetadata {
             self.metadata = nil
         } else {
             self.metadata = try? FieldLayoutRenderer.resolveAccessorMetadata(for: type, in: machO)

@@ -17,6 +17,15 @@ Type Layout / expanded 树 / Enum Layout **全部为空**。
 以及跨模块字段（经依赖闭包）。本次改造把 `FieldLayoutRenderer` 拆成两套按 reader 特化的实现，
 并把 SwiftLayout 接到 MachOFile 路径上，使离线输出**与 MachOImage 全量对齐**。
 
+## 自动 accessor 的需求边界
+
+`FieldLayoutRenderer` 保留调用者提供的 metadata。没有 supplied metadata 时，
+仅 struct/class 的 field offsets 与 enum 的 enum layout 可以触发自动 accessor 解析；
+普通声明、仅字段 Type Layout、expanded/vtable/spare-bit 选项不额外执行父类型 accessor。
+`autoResolveAccessorMetadata: false` 和泛型类型继续保留 nil metadata。
+缓存映像被映射不代表 dyld 已加载它；显式 runtime 布局调用者应提供适合执行代码的映像。
+参见 [按布局需求解析 metadata accessor](../Evolutions/draft-demand-driven-accessor-resolution.md)。
+
 ## 设计
 
 ### 1. 泛型 facade + 两套特化实现（**编译期** witness 分派，零运行时 `as?`）

@@ -1373,6 +1373,14 @@ The rationale and current validation are recorded in
 
 ---
 
+## 2026-10-03：布局需求驱动的 accessor 解析
+
+默认声明渲染不再为无布局注释的类型执行 runtime accessor。struct/class 的 field offsets
+和 enum 的 layout 保持自动解析，supplied metadata 与显式 opt-out 保持。实现位于
+SwiftDeclarationRendering；真实 accessor 计数回归纳入既有 Debug/Release CI。
+设计契约见 [提案](../Evolutions/draft-demand-driven-accessor-resolution.md) 与
+[reader 特化说明](FieldLayoutRendererReaderSpecialization.md)。本批不 bump 版本。
+
 ## 维护约定
 
 1. **每个非平凡批次结束时必须在本文追加/更新一节**（新工作弧新增一节；延续既有弧则在该节
